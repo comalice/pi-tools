@@ -10,6 +10,11 @@ https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/read_
 https://github.com/dirac-run/dirac/blob/master/src/utils/AnchorStateManager.ts
 https://github.com/dirac-run/dirac/blob/master/src/shared/utils/line-hashing.ts
 
+The edit_file port is adapted from Dirac's anchored edit validation and application:
+https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/edit_file/EditFileTool.ts
+https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/edit_file/utils/EditExecutor.ts
+https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/edit_file/EditFileApplier.ts
+
 Copyright 2026 Dirac Delta Labs and Cline Bot Inc. The upstream work is licensed
 under Apache License 2.0; see https://github.com/dirac-run/dirac/blob/master/LICENSE.
 This adaptation adds a Pi extension interface and limits access to the Pi
