@@ -9,9 +9,15 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "pi": {
-    "extensions": ["extensions/*.ts"]
+    "extensions": [
+      "extensions/*.ts"
+    ]
   },
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "diff": "^5.2.2",
+    "ts-morph": "^25.0.1"
   }
 }

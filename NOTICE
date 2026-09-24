@@ -1,6 +1,15 @@
 The list_files port is adapted from Dirac's list_files tool:
 https://github.com/dirac-run/dirac/tree/master/src/core/task/tools/modules/list_files
 
+The inspect_ast port adapts Dirac's read-only outline and implementation behavior:
+https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/inspect_ast/InspectAstTool.ts
+https://github.com/dirac-run/dirac/blob/master/src/services/source-ast/SourceDefinitionCatalog.ts
+
+The read_file port and anchor handling are adapted from:
+https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/read_file/ReadFileTool.ts
+https://github.com/dirac-run/dirac/blob/master/src/utils/AnchorStateManager.ts
+https://github.com/dirac-run/dirac/blob/master/src/shared/utils/line-hashing.ts
+
 Copyright 2026 Dirac Delta Labs and Cline Bot Inc. The upstream work is licensed
 under Apache License 2.0; see https://github.com/dirac-run/dirac/blob/master/LICENSE.
 This adaptation adds a Pi extension interface and limits access to the Pi
