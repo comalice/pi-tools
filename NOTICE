@@ -1,0 +1,7 @@
+The list_files port is adapted from Dirac's list_files tool:
+https://github.com/dirac-run/dirac/tree/master/src/core/task/tools/modules/list_files
+
+Copyright 2026 Dirac Delta Labs and Cline Bot Inc. The upstream work is licensed
+under Apache License 2.0; see https://github.com/dirac-run/dirac/blob/master/LICENSE.
+This adaptation adds a Pi extension interface and limits access to the Pi
+working directory without following symlinks.

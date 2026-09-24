@@ -1,0 +1,17 @@
+{
+  "name": "dirac-pi-tools",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": ["extensions/*.ts"]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  }
+}
