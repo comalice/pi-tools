@@ -27,6 +27,11 @@ validates IDs and exact line content against current files, presents a diff for
 explicit interactive approval, and refuses to write in non-interactive Pi
 modes. It uses atomic per-file writes and limits each batch to a reviewable diff.
 
+`search_files` runs ripgrep with optional globs and context. With
+`include_anchors`, it shares line IDs with `read_file` and can provide coordinates
+directly usable by `edit_file`; matched/context lines that changed during the
+search are not emitted as anchors.
+
 Upstream source and license attribution are recorded in `NOTICE`.
 
 Once an extension is added, load this local package with:

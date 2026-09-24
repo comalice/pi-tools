@@ -15,6 +15,10 @@ https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/edit_
 https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/edit_file/utils/EditExecutor.ts
 https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/edit_file/EditFileApplier.ts
 
+The search_files port and anchor-aware ripgrep formatting are adapted from:
+https://github.com/dirac-run/dirac/blob/master/src/core/task/tools/modules/search_files/index.ts
+https://github.com/dirac-run/dirac/blob/master/src/services/ripgrep/index.ts
+
 Copyright 2026 Dirac Delta Labs and Cline Bot Inc. The upstream work is licensed
 under Apache License 2.0; see https://github.com/dirac-run/dirac/blob/master/LICENSE.
 This adaptation adds a Pi extension interface and limits access to the Pi
