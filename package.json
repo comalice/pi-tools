@@ -11,10 +11,14 @@
   "pi": {
     "extensions": [
       "extensions/*.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "memory": "node --experimental-strip-types src/memory/cli.ts"
   },
   "dependencies": {
     "diff": "^5.2.2",

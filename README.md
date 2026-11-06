@@ -42,5 +42,22 @@ pi install /home/albertlatham/git/dirac-pi-tools
 
 Run the focused tests with `npm test`.
 
+## Skills
+
+`code-review` reviews the diff since a fixed point (`/skill:code-review main`)
+along three axes — Standards, Spec, and Adversarial Bugs — each in an isolated
+headless pi process with a fresh context, reported side by side and never
+merged. It runs a tooling pre-pass (lint/typecheck/tests) first, requires a
+citation on every finding, refuses to start on a bad ref or empty diff, and
+offers to convert repeat findings into pre-commit hooks or
+`CODING_STANDARDS.md` rules. Design informed by Matt Pocock's `code-review`
+skill (MIT) and Geoff Huntley's writing on engineering away review slop.
+
+See [durable memory](docs/memory.md) for archive ingestion, lexical
+and optional local hybrid/vector retrieval, navigable expansion, service setup,
+and rebuild limitations. Memory has no automatic recall; the extension keeps
+the archive current with a debounced background ingest at session start and
+after agent turns, while semantic indexing requires an explicit vector rebuild.
+
 See [language-server notes](docs/language-server-notes.md) for the deferred
 semantic-inspection direction.
