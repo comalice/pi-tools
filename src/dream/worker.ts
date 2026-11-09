@@ -135,7 +135,12 @@ ${chunk.transcript}`;
 export type Generate = (model: string, prompt: string) => Promise<string>;
 
 export const piGenerate: Generate = (model, prompt) => new Promise((resolve, reject) => {
-  const child = spawn("pi", ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-mcp", "--no-tools", "--model", model, prompt], { stdio: ["ignore", "pipe", "pipe"] });
+  // npm-run prepends node_modules/.bin to PATH, where a stale bundled pi may
+  // shadow the real one; strip those entries so the agent pi always wins.
+  const env = { ...process.env };
+  env.PATH = (env.PATH ?? "").split(":").filter((p) => !p.includes("node_modules/.bin")).join(":");
+  const bin = process.env.PI_AGENT_BIN ?? "pi";
+  const child = spawn(bin, ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-mcp", "--no-tools", "--model", model, prompt], { stdio: ["ignore", "pipe", "pipe"], env });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });

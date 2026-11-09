@@ -12,7 +12,7 @@ type Options = Record<string, string | string[]>;
 
 function parseArgs(argv: string[]) {
   const out: Options = {};
-  const flags = new Set(["--all", "--no-replies"]);
+  const flags = new Set(["--all", "--no-replies", "--rebuild"]);
   let command = "";
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -104,7 +104,7 @@ process.once("SIGTERM", () => operation.abort(new Error("Memory operation cancel
 try {
   const { command, out } = parseArgs(process.argv.slice(2));
   const paths = defaults(out);
-  if (!command) throw new Error("Usage: memory <ingest|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|benchmark|evaluate> [flags]");
+  if (!command) throw new Error("Usage: memory <ingest|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
 
   if (command === "ingest") {
     only(out, ["--index", "--pi-sessions", "--opencode-db", "--wiki-dir", "--claude-exports"]);
@@ -252,6 +252,71 @@ try {
     const limit = value(out, "--limit") === undefined ? undefined : positiveInt(value(out, "--limit"), "limit", 10000, 1, 1_000_000);
     const { scanEntities } = await import("../entity/scan.ts");
     emit({ ok: true, scan: scanEntities({ archivePath: paths.index, registryPath: path.join(paths.wiki, "entities.json"), limit }) });
+  } else if (command === "entity-dossier") {
+    only(out, ["--index", "--wiki-dir", "--entity", "--top", "--model", "--max-docs", "--rebuild"]);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run ingest first`);
+    const entityDb = path.join(path.dirname(paths.index), "entities.sqlite");
+    if (!existsSync(entityDb)) throw new Error("No entity mention index; run entity-scan first");
+    if (!value(out, "--entity") && !value(out, "--top")) throw new Error("entity-dossier requires --entity NAME or --top N");
+    // nemotron-3-super hangs on dossier prompts (reasoning explosion on the
+    // disposition schema); gpt-oss-120b handles them reliably and quickly.
+    const model = value(out, "--model") ?? process.env.PI_DOSSIER_MODEL ?? "gladiator/gpt-oss-120b";
+    const maxDocs = value(out, "--max-docs") === undefined ? undefined : positiveInt(value(out, "--max-docs"), "max-docs", 40, 1, 200);
+    const { updateDossier } = await import("../entity/dossier.ts");
+    const rebuild = out["--rebuild"] === "true";
+    let entities: string[];
+    if (value(out, "--entity")) {
+      entities = [value(out, "--entity")!];
+    } else {
+      const top = positiveInt(value(out, "--top"), "top", 10, 1, 100);
+      const { DatabaseSync } = await import("node:sqlite");
+      const side = new DatabaseSync(entityDb, { readOnly: true });
+      entities = (side.prepare("SELECT entity FROM mentions GROUP BY entity ORDER BY COUNT(*) DESC LIMIT ?").all(top) as unknown as { entity: string }[]).map((r) => r.entity);
+      side.close();
+    }
+    const results = [];
+    for (const entity of entities) {
+      try {
+        results.push(await updateDossier({ entity, wikiDir: paths.wiki, archivePath: paths.index, entityDbPath: entityDb, model, maxDocs, rebuild }));
+      } catch (error) {
+        results.push({ entity, status: "error", error: (error as Error).message });
+      }
+    }
+    emit({ ok: true, results });
+  } else if (command === "session-summaries") {
+    only(out, ["--index", "--wiki-dir", "--limit", "--model", "--rebuild"]);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run ingest first`);
+    const limit = value(out, "--limit") === undefined ? undefined : positiveInt(value(out, "--limit"), "limit", 50, 1, 5000);
+    const model = value(out, "--model") ?? process.env.PI_SUMMARY_MODEL ?? "gladiator/gpt-oss-120b";
+    const { summarizeSessions } = await import("./summaries.ts");
+    // Target sessions: everything cited by wiki pages plus everything in the
+    // entity mention sidecar — the sessions canonical links can point at.
+    const wanted = new Set<string>();
+    const pagesDir = path.join(paths.wiki, "pages");
+    if (existsSync(pagesDir)) {
+      const { readdirSync, readFileSync } = await import("node:fs");
+      for (const name of readdirSync(pagesDir)) {
+        if (!name.endsWith(".md")) continue;
+        for (const m of readFileSync(path.join(pagesDir, name), "utf8").matchAll(/^- (pi|opencode|claude):([^:\s]+)/gm)) {
+          wanted.add(`${m[1]}:${m[2]}`);
+        }
+      }
+    }
+    const entityDb = path.join(path.dirname(paths.index), "entities.sqlite");
+    if (existsSync(entityDb)) {
+      const { DatabaseSync } = await import("node:sqlite");
+      const side = new DatabaseSync(entityDb, { readOnly: true });
+      for (const row of side.prepare("SELECT DISTINCT source, session_id FROM mentions").all() as unknown as { source: string; session_id: string }[]) {
+        wanted.add(`${row.source}:${row.session_id}`);
+      }
+      side.close();
+    }
+    const sessions = [...wanted].map((key) => {
+      const split = key.indexOf(":");
+      return { source: key.slice(0, split), session_id: key.slice(split + 1) };
+    });
+    const storePath = path.join(path.dirname(paths.index), "session-summaries.json");
+    emit({ ok: true, candidateSessions: sessions.length, result: await summarizeSessions({ archivePath: paths.index, storePath, sessions, model, rebuild: out["--rebuild"] === "true", limit }) });
   } else if (command === "benchmark") {
     only(out, []);
     const endpoints = serviceUrls();

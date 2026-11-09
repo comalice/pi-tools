@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { marked } from "marked";
-import { parsePage, type PageMeta } from "./format.ts";
+import { parsePage, slugify, type PageMeta } from "./format.ts";
+import { renderCanonical, type LinkContext, type SessionInfo } from "./links.ts";
 import { search } from "../memory/store.ts";
 
 // Read-only web front-end for the wiki: page index sorted by verification
@@ -106,37 +107,19 @@ mark{background:#ff9}
 
 function chrome(title: string, token: string, body: string): string {
   return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${STYLE}</style>
-<nav><a href="/${token}/">pages</a><a href="/${token}/staging">staging</a><a href="/${token}/entities">entities</a>
+<nav><a href="/${token}/">pages</a><a href="/${token}/staging">staging</a><a href="/${token}/tags">tags</a><a href="/${token}/entities">entities</a>
 <form style="display:inline" action="/${token}/search"><input type="search" name="q" placeholder="search the wiki…"></form>
 <span id="dream"></span></nav>
 ${body}`;
 }
 
-// Turns a typed source identifier into a link: conversation sources deep-link
-// into the session viewer, wiki sources into pages, web sources externally.
-export function sourceLink(source: string, token: string): string {
-  const escaped = escapeHtml(source);
-  const match = source.match(/^([a-z]+):(.+)$/);
-  if (!match) return `<code>${escaped}</code>`;
-  const [, kind, rest] = match;
-  if (kind === "wiki" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(rest)) return `<a href="/${token}/page/${rest}"><code>${escaped}</code></a>`;
-  if (kind === "web") return `<a href="${escapeHtml(rest)}" rel="noreferrer"><code>${escaped}</code></a>`;
-  if (kind === "pi" || kind === "opencode" || kind === "claude") {
-    const split = rest.lastIndexOf(":");
-    const session = split > 0 ? rest.slice(0, split) : rest;
-    const entry = split > 0 ? rest.slice(split + 1) : "";
-    if (session.length > 200 || entry.length > 200) return `<code>${escaped}</code>`;
-    return `<a href="/${token}/session/${kind}/${encodeURIComponent(session)}${entry ? `#${encodeURIComponent(entry)}` : ""}"><code>${escaped}</code></a>`;
-  }
-  return `<code>${escaped}</code>`;
-}
-
-function metaTable(meta: PageMeta, token: string): string {
+function metaTable(meta: PageMeta, ctx: LinkContext): string {
   const stale = stalenessDays(meta.last_verified);
+  const tags = meta.tags.map(t => `<a href="/${ctx.token}/tags/${encodeURIComponent(t)}">${escapeHtml(t)}</a>`).join(", ") || "—";
   return `<table class="meta">
 <tr><td>created</td><td>${escapeHtml(meta.created)}</td><td>last verified</td><td class="${stale > 30 ? "stale" : "fresh"}">${escapeHtml(meta.last_verified)} (${stale}d ago)</td></tr>
-<tr><td>tags</td><td colspan="3">${escapeHtml(meta.tags.join(", ") || "—")}</td></tr>
-<tr><td>sources</td><td colspan="3">${meta.sources.map(s => sourceLink(s, token)).join("<br>") || "—"}</td></tr>
+<tr><td>tags</td><td colspan="3">${tags}</td></tr>
+<tr><td>sources</td><td colspan="3">${meta.sources.map(s => renderCanonical(s, ctx)).join("<br>") || "—"}</td></tr>
 </table>`;
 }
 
@@ -200,6 +183,18 @@ export function createWikiServer(options: WikiServerOptions): { server: Server; 
     const registry = getRegistry();
     return registry?.entities[name] ? `/${token}/entities/${encodeURIComponent(name)}` : null;
   };
+  // Durable AI-generated session summaries (may be inaccurate; see links.ts)
+  const summariesPath = path.join(path.dirname(index), "session-summaries.json");
+  let summariesCache: { at: number; map: Record<string, SessionInfo> } = { at: 0, map: {} };
+  const getSummaries = (): Record<string, SessionInfo> => {
+    try {
+      const mtime = lstatSync(summariesPath).mtimeMs;
+      if (mtime !== summariesCache.at) {
+        summariesCache = { at: mtime, map: JSON.parse(readFileSync(summariesPath, "utf8")) };
+      }
+    } catch { /* missing or invalid: keep previous */ }
+    return summariesCache.map;
+  };
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -207,6 +202,12 @@ export function createWikiServer(options: WikiServerOptions): { server: Server; 
     const notFound = () => { res.writeHead(404); res.end(); };
     if (!url.pathname.startsWith(`/${token}`)) return notFound();
     const route = url.pathname.slice(token.length + 2).replace(/\/+$/, "");
+    const ctx: LinkContext = {
+      token,
+      pageExists,
+      entityExists: (name) => !!getRegistry()?.entities[name],
+      sessionInfo: (source, sessionId) => getSummaries()[`${source}:${sessionId}`] ?? null,
+    };
 
     if (route === "") {
       const pages = listMarkdown(pagesDir).sort((a, b) => a.meta.last_verified.localeCompare(b.meta.last_verified));
@@ -239,7 +240,7 @@ ${dream ? `<p><a href="${escapeHtml(dream)}">dream runner console (active run)</
         const page = parsePage(readFileSync(file, "utf8"), file);
         return send(chrome(`${page.meta.title} — staging`, token, `
 <div class="banner"><b>Unvetted staging entry.</b> Claims here are not yet verified or curated.</div>
-<h1>${escapeHtml(page.meta.title)}</h1>${metaTable(page.meta, token)}${renderMarkdown(page.body, () => null)}`));
+<h1>${escapeHtml(page.meta.title)}</h1>${metaTable(page.meta, ctx)}${renderMarkdown(page.body, () => null)}`));
       } catch (error) {
         return send(chrome("staging error", token, `<p class="redlink">${escapeHtml((error as Error).message)}</p>`));
       }
@@ -251,10 +252,31 @@ ${dream ? `<p><a href="${escapeHtml(dream)}">dream runner console (active run)</
       if (!existsSync(file)) return notFound();
       try {
         const page = parsePage(readFileSync(file, "utf8"), file);
-        return send(chrome(page.meta.title, token, `<h1>${escapeHtml(page.meta.title)}</h1>${metaTable(page.meta, token)}${renderMarkdown(page.body, slug => (pageExists(slug) ? `/${token}/page/${slug}` : null), resolveEntity)}`));
+        return send(chrome(page.meta.title, token, `<h1>${escapeHtml(page.meta.title)}</h1>${metaTable(page.meta, ctx)}${renderMarkdown(page.body, slug => (pageExists(slug) ? `/${token}/page/${slug}` : null), resolveEntity)}`));
       } catch (error) {
         return send(chrome("page error", token, `<p class="redlink">${escapeHtml((error as Error).message)}</p>`));
       }
+    }
+
+    if (route === "tags") {
+      const pages = listMarkdown(pagesDir);
+      const counts = new Map<string, number>();
+      for (const p of pages) for (const tag of p.meta.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      const rows = [...counts.entries()].sort((a, b) => b[1] - a[1])
+        .map(([tag, n]) => `<tr><td><a href="/${token}/tags/${encodeURIComponent(tag)}">${escapeHtml(tag)}</a></td><td>${n}</td></tr>`).join("\n");
+      return send(chrome("tags — wiki", token, `<p>${counts.size} tags.</p>
+<table><tr><th>tag</th><th>pages</th></tr>${rows}</table>`));
+    }
+
+    const tagMatch = route.match(/^tags\/(.{1,80})$/);
+    if (tagMatch) {
+      const tag = decodeURIComponent(tagMatch[1]);
+      const pages = listMarkdown(pagesDir).filter(p => p.meta.tags.includes(tag));
+      const rows = pages.map(p => `<tr><td><a href="/${token}/page/${escapeHtml(p.meta.slug)}">${escapeHtml(p.meta.title)}</a></td><td>${escapeHtml(p.meta.tags.join(", "))}</td></tr>`).join("\n");
+      return send(chrome(`${tag} — tag`, token, `
+<h1>${escapeHtml(tag)}</h1>
+<table class="meta"><tr><td>tag</td><td>${escapeHtml(tag)}</td><td>pages</td><td>${pages.length}</td></tr></table>
+<table><tr><th>page</th><th>tags</th></tr>${rows}</table>`));
     }
 
     if (route === "entities") {
@@ -287,20 +309,58 @@ ${db ? "" : `<div class="banner">No mention index at <code>${escapeHtml(entityDb
       const info = registry?.entities[name];
       if (!info) return notFound();
       const db = getEntityDb();
+      // Derived dossier (agent-maintained, never indexed) rendered above raw evidence.
+      let dossierHtml = "";
+      const dossierFile = path.join(wikiDir, "dossiers", `${slugify(name)}.json`);
+      if (existsSync(dossierFile)) {
+        try {
+          const dossier = JSON.parse(readFileSync(dossierFile, "utf8")) as {
+            pages: { suffix: string | null; title: string }[];
+            fragments: { id: string; page: string | null; body: string; citations: string[] }[];
+            retired: unknown[];
+            built_at: string;
+            split_hint: string | null;
+          };
+          const citeSessions = new Map<string, { source: string; session: string }>();
+          if (db) {
+            for (const row of db.prepare("SELECT entry_id, source, session_id FROM mentions WHERE entity=? AND entry_id IS NOT NULL").all(name) as any[]) {
+              citeSessions.set(row.entry_id, { source: row.source, session: row.session_id });
+            }
+          }
+          const cite = (ids: string[]) => ids.map(id => {
+            const target = citeSessions.get(id);
+            if (!target) return `<code>${escapeHtml(id)}</code>`;
+            const info = ctx.sessionInfo?.(target.source, target.session);
+            const title = info ? `${info.summary} (AI summary — may be inaccurate)` : `${target.source}:${target.session}`;
+            const href = `/${token}/session/${target.source}/${encodeURIComponent(target.session)}#${encodeURIComponent(id)}`;
+            return `<a href="${href}" title="${escapeHtml(title)}"><code>${escapeHtml(id)}</code></a>`;
+          }).join(" ");
+          const sections = dossier.pages.map(page => {
+            const frags = dossier.fragments.filter(f => f.page === page.suffix);
+            if (frags.length === 0) return "";
+            const items = frags.map(f => `<li>${escapeHtml(f.body)}<br><span class="meta">${cite(f.citations)}</span></li>`).join("");
+            return `${page.suffix ? `<h2>${escapeHtml(page.title)}</h2>` : ""}<ul>${items}</ul>`;
+          }).join("\n");
+          dossierHtml = `
+<div class="banner"><b>Derived dossier</b> — synthesized from ${citeSessions.size} cited entries, updated ${escapeHtml(dossier.built_at.slice(0, 10))}; not curated, not indexed. ${dossier.retired.length} fragment(s) retired over its lifetime.${dossier.split_hint ? `<br><b>Split hint:</b> ${escapeHtml(dossier.split_hint)}` : ""}</div>
+${sections}`;
+        } catch { /* malformed dossier: fall through to raw mentions */ }
+      }
       let rows = "";
       let total = 0;
       if (db) {
         const mentions = db.prepare("SELECT source, session_id, entry_id, count FROM mentions WHERE entity=? ORDER BY count DESC LIMIT 500").all(name) as any[];
         total = (db.prepare("SELECT COUNT(*) AS n FROM mentions WHERE entity=?").get(name) as any)?.n ?? 0;
         rows = mentions.map(m => {
-          const href = `/${token}/session/${escapeHtml(m.source)}/${encodeURIComponent(m.session_id)}${m.entry_id ? `#${encodeURIComponent(m.entry_id)}` : ""}`;
-          return `<tr><td><a href="${href}">${escapeHtml(m.source)}:${escapeHtml(m.session_id.slice(0, 18))}…</a></td><td>${m.entry_id ? `<code>${escapeHtml(m.entry_id)}</code>` : ""}</td><td>${m.count}</td></tr>`;
+          const ref = `${m.source}:${m.session_id}${m.entry_id ? `:${m.entry_id}` : ""}`;
+          return `<tr><td>${renderCanonical(ref, ctx)}</td><td>${m.entry_id ? `<code>${escapeHtml(m.entry_id)}</code>` : ""}</td><td>${m.count}</td></tr>`;
         }).join("\n");
       }
       return send(chrome(`${name} — entity`, token, `
 <h1>${escapeHtml(name)}</h1>
 <table class="meta"><tr><td>type</td><td>${escapeHtml(info.type)}</td><td>status</td><td>${escapeHtml(info.status)}</td></tr>
 ${info.aliases.length ? `<tr><td>aliases</td><td colspan="3">${info.aliases.map(a => `<code>${escapeHtml(a)}</code>`).join(" ")}</td></tr>` : ""}</table>
+${dossierHtml}
 ${db ? (total > 500 ? `<p class="banner">Showing first 500 of ${total} mention documents.</p>` : `<p>${total} mention document${total === 1 ? "" : "s"}.</p>`) : `<div class="banner">No mention index; run <code>memory entity-scan</code>.</div>`}
 <table><tr><th>session</th><th>entry</th><th>mentions</th></tr>${rows}</table>`));
     }

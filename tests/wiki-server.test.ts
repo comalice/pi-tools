@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, it } from "node:test";
-import { createWikiServer, renderMarkdown, sourceLink, stalenessDays } from "../src/wiki/server.ts";
+import { createWikiServer, renderMarkdown, stalenessDays } from "../src/wiki/server.ts";
+import { renderCanonical } from "../src/wiki/links.ts";
 import { serializePage } from "../src/wiki/format.ts";
 import { ingestWiki } from "../src/memory/ingest.ts";
 import { openStore, replaceSession } from "../src/memory/store.ts";
@@ -31,11 +32,12 @@ describe("wiki front-end", () => {
   });
 
   it("linkifies typed source identifiers", () => {
-    assert.match(sourceLink("pi:sess-1:entry-2", "T"), /href="\/T\/session\/pi\/sess-1#entry-2"/);
-    assert.match(sourceLink("claude:sess-9", "T"), /href="\/T\/session\/claude\/sess-9"/);
-    assert.match(sourceLink("wiki:some-page", "T"), /href="\/T\/page\/some-page"/);
-    assert.match(sourceLink("web:https://example.com/x", "T"), /href="https:\/\/example.com\/x"/);
-    assert.match(sourceLink("doc:0017", "T"), /<code>doc:0017<\/code>/);
+    const ctx = { token: "T", pageExists: () => true, entityExists: () => true };
+    assert.match(renderCanonical("pi:sess-1:entry-2", ctx), /href="\/T\/session\/pi\/sess-1#entry-2"/);
+    assert.match(renderCanonical("claude:sess-9", ctx), /href="\/T\/session\/claude\/sess-9"/);
+    assert.match(renderCanonical("wiki:some-page", ctx), /href="\/T\/page\/some-page"/);
+    assert.match(renderCanonical("web:https://example.com/x", ctx), /href="https:\/\/example.com\/x"/);
+    assert.match(renderCanonical("doc:0017", ctx), /<code>doc:0017<\/code>/);
   });
 
   it("serves index, pages, staging, and search behind the persistent token", async () => {
