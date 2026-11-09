@@ -18,10 +18,13 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "memory": "node --experimental-strip-types src/memory/cli.ts"
+    "memory": "node --experimental-strip-types src/memory/cli.ts",
+    "wiki": "node --experimental-strip-types src/wiki/cli.ts",
+    "dream": "node --experimental-strip-types src/dream/runner.ts"
   },
   "dependencies": {
     "diff": "^5.2.2",
+    "marked": "^18.1.3",
     "ts-morph": "^25.0.1"
   }
 }

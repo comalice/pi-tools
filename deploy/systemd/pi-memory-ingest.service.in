@@ -1,0 +1,8 @@
+[Unit]
+Description=Pi memory archive ingest (pi, opencode, claude, wiki sources)
+Documentation=@REPO@/docs/memory.md
+
+[Service]
+Type=oneshot
+ExecStart=@NODE@ --experimental-strip-types @REPO@/src/memory/cli.ts ingest
+Nice=10

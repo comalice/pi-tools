@@ -1,0 +1,285 @@
+import { existsSync, realpathSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { expand, listSessions, openStore, status, SCHEMA_VERSION } from "./store.ts";
+import { ingestClaude, ingestOpenCode, ingestPi, ingestWiki } from "./ingest.ts";
+import { buildVectorIndex, refreshVectorIndex, searchMemory, vectorStatus } from "./semantic.ts";
+import { embedTexts, health, serviceUrls } from "./vector-client.ts";
+import { evaluateCases, readEvaluationCases } from "./evaluation.ts";
+
+type Options = Record<string, string | string[]>;
+
+function parseArgs(argv: string[]) {
+  const out: Options = {};
+  const flags = new Set(["--all", "--no-replies"]);
+  let command = "";
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("--")) {
+      if (flags.has(arg)) {
+        if (out[arg]) throw new Error(`Repeated flag: ${arg}`);
+        out[arg] = "true";
+        continue;
+      }
+      if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`Missing value for ${arg}`);
+      const value = argv[++i];
+      if (arg === "--cue") {
+        const previous = out[arg];
+        out[arg] = previous ? [...(Array.isArray(previous) ? previous : [previous]), value] : [value];
+      } else {
+        if (out[arg]) throw new Error(`Repeated flag: ${arg}`);
+        out[arg] = value;
+      }
+    } else if (!command) {
+      command = arg;
+    } else {
+      throw new Error(`Unexpected argument: ${arg}`);
+    }
+  }
+  return { command, out };
+}
+
+function value(out: Options, key: string): string | undefined {
+  const item = out[key];
+  return Array.isArray(item) ? item[0] : item;
+}
+
+function defaults(options: Options) {
+  const agent = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+  return {
+    index: value(options, "--index") || process.env.PI_MEMORY_INDEX || path.join(agent, "memory", "archive.sqlite"),
+    pi: value(options, "--pi-sessions") || path.join(agent, "sessions"),
+    opencode: value(options, "--opencode-db") || path.join(os.homedir(), ".local", "share", "opencode", "opencode.db"),
+    wiki: value(options, "--wiki-dir") || process.env.PI_WIKI_DIR || path.join(agent, "wiki"),
+    claude: value(options, "--claude-exports") || process.env.PI_CLAUDE_EXPORTS || path.join(agent, "claude-exports"),
+  };
+}
+
+function only(options: Options, allowed: string[]) {
+  for (const key of Object.keys(options)) {
+    if (!allowed.includes(key)) throw new Error(`Unknown flag: ${key}`);
+  }
+}
+
+function positiveInt(value: string | undefined, name: string, fallback: number, min: number, max: number) {
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value)) throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < min || number > max) throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  return number;
+}
+
+function emit(value: unknown) {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+function openReadIndex(filename: string) {
+  const db = new DatabaseSync(filename, { readOnly: true });
+  db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000;");
+  const schema = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (schema !== SCHEMA_VERSION) {
+    db.close();
+    throw new Error(`Unsupported memory index schema ${schema}; expected ${SCHEMA_VERSION}`);
+  }
+  return db;
+}
+
+function canonicalPath(filename: string) {
+  try { return realpathSync(filename); } catch { return path.resolve(filename); }
+}
+
+function safeIndexLocation(index: string, piSessions: string, opencode: string) {
+  const resolved = canonicalPath(index);
+  const piRoot = canonicalPath(piSessions);
+  const opencodePath = canonicalPath(opencode);
+  if (resolved === opencodePath) throw new Error("Memory index path must not equal the OpenCode source database");
+  if (resolved === piRoot || resolved.startsWith(piRoot + path.sep)) throw new Error("Memory index must not be stored inside the Pi sessions source tree");
+}
+
+const operation = new AbortController();
+process.once("SIGINT", () => operation.abort(new Error("Memory operation cancelled")));
+process.once("SIGTERM", () => operation.abort(new Error("Memory operation cancelled")));
+
+try {
+  const { command, out } = parseArgs(process.argv.slice(2));
+  const paths = defaults(out);
+  if (!command) throw new Error("Usage: memory <ingest|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|benchmark|evaluate> [flags]");
+
+  if (command === "ingest") {
+    only(out, ["--index", "--pi-sessions", "--opencode-db", "--wiki-dir", "--claude-exports"]);
+    safeIndexLocation(paths.index, paths.pi, paths.opencode);
+    const db = openStore(paths.index);
+    try {
+      const sources = [ingestPi(db, paths.pi), ingestOpenCode(db, paths.opencode), ingestClaude(db, paths.claude), ingestWiki(db, paths.wiki)];
+      emit({ ok: true, sources, status: status(db) });
+    } finally {
+      db.close();
+    }
+  } else if (command === "sessions") {
+    only(out, ["--index", "--since", "--limit"]);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run: node --experimental-strip-types src/memory/cli.ts ingest`);
+    const raw = value(out, "--since") ?? "7d";
+    const days = raw.match(/^(\d+)d$/);
+    const since = days ? new Date(Date.now() - Number(days[1]) * 24 * 60 * 60 * 1000) : new Date(raw);
+    if (Number.isNaN(since.valueOf())) throw new Error("--since must be an ISO date or a day count like 7d");
+    const limit = positiveInt(value(out, "--limit"), "limit", 500, 1, 5000);
+    const db = openReadIndex(paths.index);
+    try {
+      emit({ ok: true, since: since.toISOString(), sessions: listSessions(db, since.toISOString(), limit) });
+    } finally {
+      db.close();
+    }
+  } else if (command === "status") {
+    only(out, ["--index"]);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run: node --experimental-strip-types src/memory/cli.ts ingest`);
+    const db = openReadIndex(paths.index);
+    try {
+      emit({ ok: true, status: status(db), semantic: await vectorStatus(paths.index, operation.signal) });
+    } finally {
+      db.close();
+    }
+  } else if (command === "search") {
+    only(out, ["--index", "--query", "--cue", "--limit", "--project", "--source", "--session", "--exclude-session", "--all", "--mode", "--cosine-floor"]);
+    if (!out["--all"] && !out["--project"]) throw new Error("Search requires --project, or explicitly pass --all");
+    const query = value(out, "--query") ?? "";
+    const cues = out["--cue"] ? (Array.isArray(out["--cue"]) ? out["--cue"] : [out["--cue"]]) : [];
+    if (cues.length > 8 || cues.some(cue => cue.length > 120)) throw new Error("At most 8 cues, each no longer than 120 characters");
+    const limit = positiveInt(value(out, "--limit"), "limit", 8, 1, 20);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run: node --experimental-strip-types src/memory/cli.ts ingest`);
+    const mode = value(out, "--mode") as "auto" | "lexical" | "hybrid" | "semantic" | undefined;
+    if (mode && !["auto", "lexical", "hybrid", "semantic"].includes(mode)) throw new Error("mode must be lexical, hybrid, semantic, or auto");
+    const floorValue = value(out, "--cosine-floor");
+    const cosineFloor = floorValue === undefined ? undefined : Number(floorValue);
+    if (cosineFloor !== undefined && (!Number.isFinite(cosineFloor) || cosineFloor < -1 || cosineFloor > 1)) throw new Error("cosine-floor must be a finite number between -1 and 1");
+    const db = openReadIndex(paths.index);
+    try {
+      const excludedSession = value(out, "--exclude-session");
+      const result = await searchMemory(db, paths.index, {
+        query,
+        cues,
+        limit,
+        project: value(out, "--project"),
+        source: value(out, "--source"),
+        session: value(out, "--session"),
+        currentSession: excludedSession,
+        scope: out["--all"] ? "all" : "project",
+        mode,
+        cosineFloor,
+      }, operation.signal);
+      const freshness = (excludedSession
+        ? db.prepare("SELECT MAX(timestamp) AS latest FROM documents WHERE session_id<>?").get(excludedSession)
+        : db.prepare("SELECT MAX(timestamp) AS latest FROM documents").get()) as any;
+      emit({ ok: true, ...result, archive: { latest: freshness?.latest ?? null } });
+    } finally {
+      db.close();
+    }
+  } else if (command === "expand") {
+    only(out, ["--index", "--id", "--max-chars", "--project", "--source", "--all", "--offset", "--direction", "--branch-id", "--no-replies"]);
+    if (!out["--all"] && !out["--project"]) throw new Error("Expand requires --project, or explicitly pass --all");
+    const maxChars = positiveInt(value(out, "--max-chars"), "max-chars", 3000, 200, 8000);
+    const offset = positiveInt(value(out, "--offset"), "offset", 0, 0, 100_000_000);
+    const direction = value(out, "--direction") as "backward" | "forward" | "both" | undefined;
+    if (direction && !["backward", "forward", "both"].includes(direction)) throw new Error("direction must be backward, forward, or both");
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run: node --experimental-strip-types src/memory/cli.ts ingest`);
+    const db = openReadIndex(paths.index);
+    try {
+      const result = expand(db, value(out, "--id") || "", {
+        project: value(out, "--project"),
+        scope: out["--all"] ? "all" : "project",
+        maxChars,
+        source: value(out, "--source"),
+        offset,
+        direction,
+        branchId: value(out, "--branch-id"),
+        includeReplies: !out["--no-replies"],
+      });
+      if (!result) throw new Error("Memory result not found or outside selected project/source scope");
+      emit({ ok: true, result });
+    } finally {
+      db.close();
+    }
+  } else if (command === "vector-build") {
+    only(out, ["--index"]);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run ingest first`);
+    safeIndexLocation(paths.index, paths.pi, paths.opencode);
+    const check = openReadIndex(paths.index);
+    check.close();
+    emit({ ok: true, build: await buildVectorIndex(paths.index, operation.signal) });
+  } else if (command === "vector-refresh") {
+    only(out, ["--index", "--max-age-hours"]);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run ingest first`);
+    const hours = positiveInt(value(out, "--max-age-hours") ?? process.env.PI_MEMORY_VECTOR_REFRESH_HOURS, "max-age-hours", 24, 1, 24 * 30);
+    emit({ ok: true, refresh: await refreshVectorIndex(paths.index, { maxAgeMs: hours * 60 * 60 * 1000 }, operation.signal) });
+  } else if (command === "vector-status") {
+    only(out, ["--index"]);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run ingest first`);
+    emit({ ok: true, semantic: await vectorStatus(paths.index, operation.signal) });
+  } else if (command === "evaluate") {
+    only(out, ["--index", "--cases", "--top-k", "--cosine-floor", "--exclude-session"]);
+    const fixture = value(out, "--cases");
+    if (!fixture) throw new Error("Evaluation requires --cases PRIVATE_JSON_FILE");
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run: node --experimental-strip-types src/memory/cli.ts ingest`);
+    const topK = positiveInt(value(out, "--top-k"), "top-k", 5, 1, 20);
+    const floorValue = value(out, "--cosine-floor");
+    const cosineFloor = floorValue === undefined ? undefined : Number(floorValue);
+    if (cosineFloor !== undefined && (!Number.isFinite(cosineFloor) || cosineFloor < -1 || cosineFloor > 1)) throw new Error("cosine-floor must be a finite number between -1 and 1");
+    const cases = readEvaluationCases(fixture);
+    const db = openReadIndex(paths.index);
+    try {
+      const report = await evaluateCases(cases, async (test, mode) => {
+        const result = await searchMemory(db, paths.index, {
+          query: test.query,
+          cues: test.cues,
+          limit: topK,
+          project: test.project,
+          source: test.source,
+          session: test.session,
+          currentSession: value(out, "--exclude-session"),
+          scope: test.scope ?? (test.project ? "project" : "all"),
+          mode,
+          cosineFloor,
+        }, operation.signal);
+        return { resultIds: result.results.map(row => row.result_id), elapsedMs: result.retrieval.elapsedMs, status: result.retrieval.status };
+      }, undefined, topK);
+      emit(report);
+    } finally {
+      db.close();
+    }
+  } else if (command === "entity-scan") {
+    only(out, ["--index", "--wiki-dir", "--limit"]);
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run ingest first`);
+    const limit = value(out, "--limit") === undefined ? undefined : positiveInt(value(out, "--limit"), "limit", 10000, 1, 1_000_000);
+    const { scanEntities } = await import("../entity/scan.ts");
+    emit({ ok: true, scan: scanEntities({ archivePath: paths.index, registryPath: path.join(paths.wiki, "entities.json"), limit }) });
+  } else if (command === "benchmark") {
+    only(out, []);
+    const endpoints = serviceUrls();
+    const started = Date.now();
+    const model = await health(endpoints.embedder, operation.signal);
+    const healthMs = Date.now() - started;
+    const synthetic = Array.from({ length: 8 }, (_, i) => (`Synthetic benchmark passage ${i}: ` + "local embedding throughput sample ".repeat(50)).slice(0, 1400));
+    const rounds = 3;
+    const passageStarted = Date.now();
+    for (let round = 0; round < rounds; round++) await embedTexts(endpoints.embedder, synthetic, "passage", operation.signal);
+    const passageMs = Date.now() - passageStarted;
+    const queryStarted = Date.now();
+    for (let round = 0; round < rounds; round++) await embedTexts(endpoints.embedder, synthetic.slice(0, 4), "query", operation.signal);
+    const queryMs = Date.now() - queryStarted;
+    emit({
+      ok: true,
+      model: { model: model.model, revision: model.revision, dimension: model.dimension },
+      healthMs,
+      rounds,
+      passageTextsPerSecond: synthetic.length * rounds / (passageMs / 1000),
+      queryTextsPerSecond: 4 * rounds / (queryMs / 1000),
+      passageMs,
+      queryMs,
+    });
+  } else {
+    throw new Error(`Unknown command: ${command}`);
+  }
+} catch (error) {
+  emit({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  process.exitCode = 1;
+}

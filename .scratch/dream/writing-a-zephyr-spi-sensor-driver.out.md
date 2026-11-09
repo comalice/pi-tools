@@ -1,0 +1,3 @@
+
+
+I staged five extractions from the session on writing a Zephyr SPI sensor driver for the XV7021: (1) a decision on using the sensor subsystem versus a custom driver based on measurement needs; (2) facts about the XV7021's SPI mode 3 configuration and voltage-dependent frequency limits; (3) a process for configuring the device tree with proper SPI settings and chip-select; (4) a gotcha regarding the voltage-dependent SPI frequency maximum (10MHz vs 5MHz); and (5) an ops pattern detailing the register access protocol where the MSB of the address byte controls read/write and bits A[4:0] specify the register address.

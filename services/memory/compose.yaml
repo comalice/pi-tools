@@ -1,0 +1,59 @@
+name: pi-memory
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    restart: unless-stopped
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    networks:
+      - memory-private
+
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6335:6335"
+    environment:
+      EMBEDDING_THREADS: "${PI_MEMORY_THREADS:-4}"
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      FASTEMBED_CACHE_PATH: /opt/fastembed
+    depends_on:
+      - qdrant
+    mem_limit: 2g
+    cpus: 4.0
+    pids_limit: 128
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6335/health', timeout=2).read()"
+      interval: 15s
+      timeout: 3s
+      start_period: 90s
+      retries: 3
+    networks:
+      - memory-private
+
+networks:
+  memory-private:
+    driver: bridge
+
+volumes:
+  qdrant-data:

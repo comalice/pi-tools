@@ -53,6 +53,19 @@ offers to convert repeat findings into pre-commit hooks or
 `CODING_STANDARDS.md` rules. Design informed by Matt Pocock's `code-review`
 skill (MIT) and Geoff Huntley's writing on engineering away review slop.
 
+`fresh_review` runs up to three independent read-only review tasks in parallel,
+each in a fresh Pi process using the active model. Workers have read/grep/find/ls
+only, with skills, extensions and MCP disabled; this is a tool allowlist, not an
+OS sandbox. Prompts and results consume model tokens. The parent must pin the
+scope and verify findings; workers cannot run git or see the parent session.
+
+`documentation-review` audits documentation against code, configuration,
+tests, and other evidence without editing it. Use
+`/skill:documentation-review README.md` or supply a subsystem or comparison.
+`technical-writing` writes or updates documentation for its audience; use `/skill:technical-writing` with
+the requested scope. Both use shared, on-demand guidance for different document
+types, rather than a separate skill for each type.
+
 See [durable memory](docs/memory.md) for archive ingestion, lexical
 and optional local hybrid/vector retrieval, navigable expansion, service setup,
 and rebuild limitations. Memory has no automatic recall; the extension keeps

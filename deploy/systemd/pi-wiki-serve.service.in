@@ -1,0 +1,12 @@
+[Unit]
+Description=Pi wiki read-only web front-end
+Documentation=@REPO@/docs/wiki.md
+
+[Service]
+Type=simple
+ExecStart=@NODE@ --experimental-strip-types @REPO@/src/wiki/cli.ts serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

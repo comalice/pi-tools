@@ -1,0 +1,8 @@
+[Unit]
+Description=Pi memory semantic vector index refresh (self-gating)
+Documentation=@REPO@/docs/memory.md
+
+[Service]
+Type=oneshot
+ExecStart=@NODE@ --experimental-strip-types @REPO@/src/memory/cli.ts vector-refresh
+Nice=10
