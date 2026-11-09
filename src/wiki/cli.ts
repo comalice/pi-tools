@@ -17,7 +17,7 @@ function wikiDir(options: Record<string, string>): string {
 
 function parseArgs(argv: string[]) {
   const out: Record<string, string | string[]> = {};
-  const flags = new Set(["--staging"]);
+  const flags = new Set(["--staging", "--counts-only"]);
   let command = "";
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
