@@ -115,7 +115,7 @@ ${body}`;
 
 function metaTable(meta: PageMeta, ctx: LinkContext): string {
   const stale = stalenessDays(meta.last_verified);
-  const tags = meta.tags.map(t => `<a href="/${ctx.token}/tags/${encodeURIComponent(t)}">${escapeHtml(t)}</a>`).join(", ") || "—";
+  const tags = meta.tags.map(t => `<a href="/${ctx.token}/tags/${encodeURIComponent(t.toLowerCase())}">${escapeHtml(t)}</a>`).join(", ") || "—";
   return `<table class="meta">
 <tr><td>created</td><td>${escapeHtml(meta.created)}</td><td>last verified</td><td class="${stale > 30 ? "stale" : "fresh"}">${escapeHtml(meta.last_verified)} (${stale}d ago)</td></tr>
 <tr><td>tags</td><td colspan="3">${tags}</td></tr>
@@ -258,25 +258,51 @@ ${dream ? `<p><a href="${escapeHtml(dream)}">dream runner console (active run)</
       }
     }
 
+    // Tags group case-insensitively; the commonest surface form is the label.
+    const tagGroups = () => {
+      const groups = new Map<string, { label: string; forms: Map<string, number>; pages: ListedPage[]; staged: ListedPage[] }>();
+      const add = (entry: ListedPage, staged: boolean) => {
+        for (const raw of entry.meta.tags) {
+          const key = raw.toLowerCase();
+          let group = groups.get(key);
+          if (!group) {
+            group = { label: raw, forms: new Map(), pages: [], staged: [] };
+            groups.set(key, group);
+          }
+          group.forms.set(raw, (group.forms.get(raw) ?? 0) + 1);
+          group.label = [...group.forms.entries()].sort((a, b) => b[1] - a[1])[0][0];
+          (staged ? group.staged : group.pages).push(entry);
+        }
+      };
+      for (const p of listMarkdown(pagesDir)) add(p, false);
+      for (const s of listMarkdown(stagingDir)) add(s, true);
+      return groups;
+    };
+
     if (route === "tags") {
-      const pages = listMarkdown(pagesDir);
-      const counts = new Map<string, number>();
-      for (const p of pages) for (const tag of p.meta.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
-      const rows = [...counts.entries()].sort((a, b) => b[1] - a[1])
-        .map(([tag, n]) => `<tr><td><a href="/${token}/tags/${encodeURIComponent(tag)}">${escapeHtml(tag)}</a></td><td>${n}</td></tr>`).join("\n");
-      return send(chrome("tags — wiki", token, `<p>${counts.size} tags.</p>
-<table><tr><th>tag</th><th>pages</th></tr>${rows}</table>`));
+      const groups = tagGroups();
+      const rows = [...groups.values()].sort((a, b) => (b.pages.length + b.staged.length) - (a.pages.length + a.staged.length))
+        .map(g => {
+          const key = g.label.toLowerCase();
+          return `<tr><td><a href="/${token}/tags/${encodeURIComponent(key)}">${escapeHtml(g.label)}</a></td><td>${g.pages.length}</td><td>${g.staged.length || "—"}</td></tr>`;
+        }).join("\n");
+      return send(chrome("tags — wiki", token, `<p>${groups.size} tags.</p>
+<table><tr><th>tag</th><th>pages</th><th>staging</th></tr>${rows}</table>`));
     }
 
     const tagMatch = route.match(/^tags\/(.{1,80})$/);
     if (tagMatch) {
-      const tag = decodeURIComponent(tagMatch[1]);
-      const pages = listMarkdown(pagesDir).filter(p => p.meta.tags.includes(tag));
-      const rows = pages.map(p => `<tr><td><a href="/${token}/page/${escapeHtml(p.meta.slug)}">${escapeHtml(p.meta.title)}</a></td><td>${escapeHtml(p.meta.tags.join(", "))}</td></tr>`).join("\n");
-      return send(chrome(`${tag} — tag`, token, `
-<h1>${escapeHtml(tag)}</h1>
-<table class="meta"><tr><td>tag</td><td>${escapeHtml(tag)}</td><td>pages</td><td>${pages.length}</td></tr></table>
-<table><tr><th>page</th><th>tags</th></tr>${rows}</table>`));
+      const key = decodeURIComponent(tagMatch[1]).toLowerCase();
+      const group = tagGroups().get(key);
+      if (!group) return notFound();
+      const pageRows = group.pages.map(p => `<tr><td><a href="/${token}/page/${escapeHtml(p.meta.slug)}">${escapeHtml(p.meta.title)}</a></td><td>${escapeHtml(p.meta.tags.join(", "))}</td></tr>`).join("\n");
+      const stagedRows = group.staged.map(p => `<tr><td><a href="/${token}/staging/${encodeURIComponent(path.basename(p.file))}">${escapeHtml(p.meta.title)}</a></td><td>${escapeHtml(p.meta.tags.join(", "))}</td></tr>`).join("\n");
+      return send(chrome(`${group.label} — tag`, token, `
+<h1>${escapeHtml(group.label)}</h1>
+<table class="meta"><tr><td>tag</td><td>${escapeHtml(group.label)}</td><td>pages</td><td>${group.pages.length}</td><td>staging</td><td>${group.staged.length}</td></tr></table>
+<table><tr><th>page</th><th>tags</th></tr>${pageRows}</table>
+${group.staged.length ? `<div class="banner"><b>Unvetted staging entries</b> share this tag; claims are not yet curated.</div>
+<table><tr><th>staging entry</th><th>tags</th></tr>${stagedRows}</table>` : ""}`));
     }
 
     if (route === "entities") {
