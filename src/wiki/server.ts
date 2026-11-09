@@ -315,16 +315,28 @@ ${group.staged.length ? `<div class="banner"><b>Unvetted staging entries</b> sha
           counts.set(row.entity, { mentions: row.mentions, docs: row.docs });
         }
       }
+      const dossierDir = path.join(wikiDir, "dossiers");
+      const dossiered = new Set(
+        existsSync(dossierDir)
+          ? readdirSync(dossierDir).filter(f => f.endsWith(".json") && !f.endsWith(".failed-output.json")).map(f => f.slice(0, -5))
+          : [],
+      );
       const rows = Object.entries(registry.entities)
         .filter(([, info]) => info.status !== "rejected")
-        .sort((a, b) => (counts.get(b[0])?.mentions ?? 0) - (counts.get(a[0])?.mentions ?? 0))
+        .sort((a, b) => {
+          const ad = dossiered.has(slugify(a[0])) ? 1 : 0;
+          const bd = dossiered.has(slugify(b[0])) ? 1 : 0;
+          if (ad !== bd) return bd - ad; // dossiered entities first
+          return (counts.get(b[0])?.mentions ?? 0) - (counts.get(a[0])?.mentions ?? 0);
+        })
         .map(([name, info]) => {
           const c = counts.get(name);
-          return `<tr><td><a href="/${token}/entities/${encodeURIComponent(name)}">${escapeHtml(name)}</a></td><td>${escapeHtml(info.type)}</td><td>${escapeHtml(info.status)}</td><td>${c?.mentions ?? "—"}</td><td>${c?.docs ?? "—"}</td></tr>`;
+          const has = dossiered.has(slugify(name));
+          return `<tr><td><a href="/${token}/entities/${encodeURIComponent(name)}">${escapeHtml(name)}</a>${has ? " <b title='derived dossier available'>▤</b>" : ""}</td><td>${escapeHtml(info.type)}</td><td>${escapeHtml(info.status)}</td><td>${c?.mentions ?? "—"}</td><td>${c?.docs ?? "—"}</td></tr>`;
         }).join("\n");
       return send(chrome("entities — wiki", token, `
 ${db ? "" : `<div class="banner">No mention index at <code>${escapeHtml(entityDbPath)}</code>; run <code>memory entity-scan</code>.</div>`}
-<p>${Object.keys(registry.entities).length} entities in the registry.</p>
+<p>${Object.keys(registry.entities).length} entities in the registry; ${dossiered.size} have derived dossiers (▤, sorted first).</p>
 <table><tr><th>entity</th><th>type</th><th>status</th><th>mentions</th><th>documents</th></tr>${rows}</table>`));
     }
 
