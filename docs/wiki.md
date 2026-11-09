@@ -111,3 +111,31 @@ every page edit and after registry changes. LLMs should never hand-write
 entity links; the linker owns them. The front-end renders them to
 `/<token>/entities/<name>`, which lists every mentioning document with
 session deep-links (data from the `entity-scan` sidecar).
+
+## Entity dossiers
+
+`npm run memory -- entity-dossier --entity "Name" [--rebuild] [--max-docs N]`
+(or `--top N`) maintains derived per-entity dossiers in `wiki/dossiers/`
+(git-ignored, never indexed, never hand-edited). An update run feeds the
+worker only mention documents newer than the entity's watermark; every
+existing fragment must be explicitly kept/amended/retired/merged, so nothing
+is lost silently; retired fragments are logged. Citations validate against
+the entity's mention set (DOC ids, truncated ids, and hallucinated ids are
+normalized or stripped; unverifiable fragments are dropped). Dossiers may
+split into refinement pages (hub + suffixes, Wikipedia-style). Tempo: manual
+for now; when scheduled, run weekly after the dream timer, watermark-gated
+per entity. Model: `PI_DOSSIER_MODEL` (default `gladiator/gpt-oss-120b`;
+nemotron-3-super hangs on dossier prompts).
+
+## Canonical links and session summaries
+
+`src/wiki/links.ts` is the single component that renders canonical
+references (typed sources, entities, sessions) as links — used by page meta
+tables, mention tables, and dossier citations. Session labels come from
+`~/.pi/agent/memory/session-summaries.json`, a durable store of AI-generated
+one-line summaries (may be inaccurate; session id and dates are always in
+the link title). Regenerate/extend with
+`npm run memory -- session-summaries [--limit N] [--rebuild]`; it covers
+sessions cited by wiki pages and present in the entity mention sidecar.
+Tags on wiki pages link to `/tags/<tag>`, which mirrors the entity-page
+format.
