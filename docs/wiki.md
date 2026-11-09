@@ -100,3 +100,14 @@ never an agent's unreviewed summary of an agent's summary.
 - The librarian remains a manually-invoked skill until its output is trusted.
 - No devops/skill-extraction agent; dream mode's ops-pattern extractions are
   its intended feedstock.
+
+## Entity autolinking
+
+`npm run wiki -- link-entities` rewrites `pages/*.md`, converting the first
+plain-text occurrence of each known entity (from `entities.json`) into
+`[[entity:Name|original surface]]` links. It never touches frontmatter,
+code, headings, existing links, or URLs, and it is idempotent — run it after
+every page edit and after registry changes. LLMs should never hand-write
+entity links; the linker owns them. The front-end renders them to
+`/<token>/entities/<name>`, which lists every mentioning document with
+session deep-links (data from the `entity-scan` sidecar).

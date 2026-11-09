@@ -148,13 +148,35 @@ try {
     const agent = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
     const index = value("--index") || process.env.PI_MEMORY_INDEX || path.join(agent, "memory", "archive.sqlite");
     emit({ ok: true, survey: runSurvey(root, index) });
+  } else if (command === "link-entities") {
+    assertRealDirectory(root, "Wiki root");
+    const pagesDir = path.join(root, "pages");
+    const { buildGazetteer } = await import("../entity/scan.ts");
+    const { linkEntityMentions } = await import("../entity/link.ts");
+    const { gazetteer } = buildGazetteer(path.join(root, "entities.json"));
+    const files = readdirSync(pagesDir).filter(name => name.endsWith(".md"));
+    const results = [];
+    let totalAdded = 0;
+    for (const name of files) {
+      const file = path.join(pagesDir, name);
+      const stat = lstatSync(file);
+      if (stat.isSymbolicLink() || !stat.isFile()) continue;
+      const original = readFileSync(file, "utf8");
+      const { text, added } = linkEntityMentions(original, gazetteer);
+      if (added > 0 && text !== original) {
+        writeFileSync(file, text, { mode: 0o600 });
+        results.push({ file: name, added });
+        totalAdded += added;
+      }
+    }
+    emit({ ok: true, pagesScanned: files.length, pagesChanged: results.length, linksAdded: totalAdded, changed: results });
   } else if (command === "serve") {
     assertRealDirectory(root, "Wiki root");
     const port = Number(value("--port") ?? process.env.PI_WIKI_PORT ?? 6341);
     if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error("--port must be an integer from 1024 to 65535");
     serveWiki({ wikiDir: root, port });
   } else {
-    throw new Error("Usage: wiki <init|new|stage|list|survey|serve> [flags]");
+    throw new Error("Usage: wiki <init|new|stage|list|survey|link-entities|serve> [flags]");
   }
 } catch (error) {
   emit({ ok: false, error: error instanceof Error ? error.message : String(error) });

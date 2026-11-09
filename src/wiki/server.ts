@@ -28,15 +28,25 @@ export function stalenessDays(lastVerified: string, now = Date.now()): number {
   return Math.max(0, Math.floor((now - Date.parse(lastVerified)) / (24 * 60 * 60 * 1000)));
 }
 
-// resolveLink returns the href for an existing target, or null for a missing
-// one (rendered as a visible red link). Raw HTML is escaped before rendering —
-// pages display conversation content verbatim and must not inject markup — so
-// link injection happens after escaping.
-export function renderMarkdown(body: string, resolveLink: (slug: string) => string | null): string {
-  const linked = escapeHtml(body).replace(/\[\[([a-z0-9][a-z0-9-]{0,79})\]\]/g, (_all, slug) => {
-    const href = resolveLink(slug);
-    return href ? `[${slug}](${href})` : `<span class="redlink">[[${slug}]] (missing)</span>`;
-  });
+// resolveLink / resolveEntity return the href for an existing target, or null
+// for a missing one (rendered as a visible red link). Raw HTML is escaped
+// before rendering — pages display conversation content verbatim and must not
+// inject markup — so link injection happens after escaping.
+export function renderMarkdown(
+  body: string,
+  resolveLink: (slug: string) => string | null,
+  resolveEntity: (name: string) => string | null = () => null,
+): string {
+  const linked = escapeHtml(body)
+    .replace(/\[\[entity:([^\]|]{1,80})(?:\|([^\]]{1,160}))?\]\]/g, (_all, name, display) => {
+      const href = resolveEntity(name);
+      const text = display || name;
+      return href ? `[${text}](${href})` : `<span class="redlink">${text} (unknown entity)</span>`;
+    })
+    .replace(/\[\[([a-z0-9][a-z0-9-]{0,79})\]\]/g, (_all, slug) => {
+      const href = resolveLink(slug);
+      return href ? `[${slug}](${href})` : `<span class="redlink">[[${slug}]] (missing)</span>`;
+    });
   return marked.parse(linked) as string;
 }
 
@@ -96,7 +106,7 @@ mark{background:#ff9}
 
 function chrome(title: string, token: string, body: string): string {
   return `<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${STYLE}</style>
-<nav><a href="/${token}/">pages</a><a href="/${token}/staging">staging</a>
+<nav><a href="/${token}/">pages</a><a href="/${token}/staging">staging</a><a href="/${token}/entities">entities</a>
 <form style="display:inline" action="/${token}/search"><input type="search" name="q" placeholder="search the wiki…"></form>
 <span id="dream"></span></nav>
 ${body}`;
@@ -166,6 +176,30 @@ export function createWikiServer(options: WikiServerOptions): { server: Server; 
     return dreamCache.url;
   };
   const pageExists = (slug: string) => existsSync(path.join(pagesDir, `${slug}.md`));
+  const entityDbPath = path.join(path.dirname(index), "entities.sqlite");
+  let entityDb: DatabaseSync | null | undefined;
+  const getEntityDb = () => {
+    if (entityDb === undefined) {
+      entityDb = existsSync(entityDbPath) ? new DatabaseSync(entityDbPath, { readOnly: true }) : null;
+      entityDb?.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000;");
+    }
+    return entityDb;
+  };
+  const getRegistry = () => {
+    const file = path.join(wikiDir, "entities.json");
+    if (!existsSync(file)) return null;
+    try {
+      return JSON.parse(readFileSync(file, "utf8")) as {
+        entities: Record<string, { type: string; aliases: string[]; status: string }>;
+      };
+    } catch {
+      return null;
+    }
+  };
+  const resolveEntity = (name: string) => {
+    const registry = getRegistry();
+    return registry?.entities[name] ? `/${token}/entities/${encodeURIComponent(name)}` : null;
+  };
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -217,10 +251,58 @@ ${dream ? `<p><a href="${escapeHtml(dream)}">dream runner console (active run)</
       if (!existsSync(file)) return notFound();
       try {
         const page = parsePage(readFileSync(file, "utf8"), file);
-        return send(chrome(page.meta.title, token, `<h1>${escapeHtml(page.meta.title)}</h1>${metaTable(page.meta, token)}${renderMarkdown(page.body, slug => (pageExists(slug) ? `/${token}/page/${slug}` : null))}`));
+        return send(chrome(page.meta.title, token, `<h1>${escapeHtml(page.meta.title)}</h1>${metaTable(page.meta, token)}${renderMarkdown(page.body, slug => (pageExists(slug) ? `/${token}/page/${slug}` : null), resolveEntity)}`));
       } catch (error) {
         return send(chrome("page error", token, `<p class="redlink">${escapeHtml((error as Error).message)}</p>`));
       }
+    }
+
+    if (route === "entities") {
+      const registry = getRegistry();
+      if (!registry) return send(chrome("entities — wiki", token, `<p>No <code>entities.json</code> registry in the wiki yet.</p>`));
+      const db = getEntityDb();
+      const counts = new Map<string, { mentions: number; docs: number }>();
+      if (db) {
+        for (const row of db.prepare("SELECT entity, SUM(count) AS mentions, COUNT(*) AS docs FROM mentions GROUP BY entity").all() as any[]) {
+          counts.set(row.entity, { mentions: row.mentions, docs: row.docs });
+        }
+      }
+      const rows = Object.entries(registry.entities)
+        .filter(([, info]) => info.status !== "rejected")
+        .sort((a, b) => (counts.get(b[0])?.mentions ?? 0) - (counts.get(a[0])?.mentions ?? 0))
+        .map(([name, info]) => {
+          const c = counts.get(name);
+          return `<tr><td><a href="/${token}/entities/${encodeURIComponent(name)}">${escapeHtml(name)}</a></td><td>${escapeHtml(info.type)}</td><td>${escapeHtml(info.status)}</td><td>${c?.mentions ?? "—"}</td><td>${c?.docs ?? "—"}</td></tr>`;
+        }).join("\n");
+      return send(chrome("entities — wiki", token, `
+${db ? "" : `<div class="banner">No mention index at <code>${escapeHtml(entityDbPath)}</code>; run <code>memory entity-scan</code>.</div>`}
+<p>${Object.keys(registry.entities).length} entities in the registry.</p>
+<table><tr><th>entity</th><th>type</th><th>status</th><th>mentions</th><th>documents</th></tr>${rows}</table>`));
+    }
+
+    const entityMatch = route.match(/^entities\/(.{1,160})$/);
+    if (entityMatch) {
+      const name = decodeURIComponent(entityMatch[1]);
+      const registry = getRegistry();
+      const info = registry?.entities[name];
+      if (!info) return notFound();
+      const db = getEntityDb();
+      let rows = "";
+      let total = 0;
+      if (db) {
+        const mentions = db.prepare("SELECT source, session_id, entry_id, count FROM mentions WHERE entity=? ORDER BY count DESC LIMIT 500").all(name) as any[];
+        total = (db.prepare("SELECT COUNT(*) AS n FROM mentions WHERE entity=?").get(name) as any)?.n ?? 0;
+        rows = mentions.map(m => {
+          const href = `/${token}/session/${escapeHtml(m.source)}/${encodeURIComponent(m.session_id)}${m.entry_id ? `#${encodeURIComponent(m.entry_id)}` : ""}`;
+          return `<tr><td><a href="${href}">${escapeHtml(m.source)}:${escapeHtml(m.session_id.slice(0, 18))}…</a></td><td>${m.entry_id ? `<code>${escapeHtml(m.entry_id)}</code>` : ""}</td><td>${m.count}</td></tr>`;
+        }).join("\n");
+      }
+      return send(chrome(`${name} — entity`, token, `
+<h1>${escapeHtml(name)}</h1>
+<table class="meta"><tr><td>type</td><td>${escapeHtml(info.type)}</td><td>status</td><td>${escapeHtml(info.status)}</td></tr>
+${info.aliases.length ? `<tr><td>aliases</td><td colspan="3">${info.aliases.map(a => `<code>${escapeHtml(a)}</code>`).join(" ")}</td></tr>` : ""}</table>
+${db ? (total > 500 ? `<p class="banner">Showing first 500 of ${total} mention documents.</p>` : `<p>${total} mention document${total === 1 ? "" : "s"}.</p>`) : `<div class="banner">No mention index; run <code>memory entity-scan</code>.</div>`}
+<table><tr><th>session</th><th>entry</th><th>mentions</th></tr>${rows}</table>`));
     }
 
     const sessionMatch = route.match(/^session\/(pi|opencode|claude)\/([^/]{1,200})$/);
