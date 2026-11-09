@@ -34,6 +34,7 @@ export class Gazetteer {
   private nodes: Node[] = [{ next: new Map(), fail: 0, out: [] }];
   /** pattern index -> { entity, surface } */
   private patterns: { entity: string; surface: string }[] = [];
+  private entitySet = new Set<string>();
 
   /** entries: [canonicalName, surfaceForm][] — surfaces must be lowercase. */
   constructor(entries: [string, string][]) {
@@ -41,6 +42,11 @@ export class Gazetteer {
       this.addPattern(entity, surface);
     }
     this.buildFailures();
+  }
+
+  /** True when the canonical entity name is in this gazetteer. */
+  has(entity: string): boolean {
+    return this.entitySet.has(entity);
   }
 
   private addPattern(entity: string, surface: string): void {
@@ -57,6 +63,7 @@ export class Gazetteer {
     }
     this.nodes[cur].out.push(this.patterns.length);
     this.patterns.push({ entity, surface });
+    this.entitySet.add(entity);
   }
 
   private buildFailures(): void {

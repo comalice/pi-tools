@@ -163,7 +163,7 @@ try {
       if (stat.isSymbolicLink() || !stat.isFile()) continue;
       const original = readFileSync(file, "utf8");
       const { text, added } = linkEntityMentions(original, gazetteer);
-      if (added > 0 && text !== original) {
+      if (text !== original) {
         writeFileSync(file, text, { mode: 0o600 });
         results.push({ file: name, added });
         totalAdded += added;

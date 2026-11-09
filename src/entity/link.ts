@@ -90,6 +90,13 @@ export function linkEntityMentions(
   markdown: string,
   gazetteer: Gazetteer,
 ): { text: string; added: number } {
+  // Prune links whose target is no longer a linkable entity (rejected or
+  // dropped from the registry): unwrap to the display surface.
+  markdown = markdown.replace(
+    /\[\[entity:([^\]|]{1,80})(?:\|([^\]\n]{1,120}))?\]\]/g,
+    (whole, name: string, surface?: string) => (gazetteer.has(name) ? whole : (surface ?? name)),
+  );
+
   const linked = new Set<string>();
   for (const match of markdown.matchAll(EXISTING_ENTITY_LINK)) {
     linked.add(match[1]);

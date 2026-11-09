@@ -75,7 +75,11 @@ export function scanEntities(options?: {
   ).c;
   const limit = Math.min(options?.limit ?? count, count);
 
-  if (existsSync(dbPath)) unlinkSync(dbPath);
+  // Remove stale WAL/SHM alongside the DB: another process (wiki server) may
+  // hold the old inode, and mismatched wal/shm corrupts the fresh database.
+  for (const suffix of ["", "-wal", "-shm"]) {
+    if (existsSync(dbPath + suffix)) unlinkSync(dbPath + suffix);
+  }
   mkdirSync(dirname(dbPath), { recursive: true });
   const out = new DatabaseSync(dbPath);
   out.exec(`
