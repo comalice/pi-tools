@@ -23,6 +23,10 @@ const PROTECTED =
 
 const EXISTING_ENTITY_LINK = /\[\[entity:([^\]|]{1,80})/g;
 
+// Typed source citations (pi:<session>:<entry>, claude:..., wiki:...) —
+// never link inside them; 'pi' here is a provenance prefix, not the entity.
+const CITATION = /\b(?:pi|opencode|claude|wiki|doc|web):[0-9a-zA-Z][0-9a-zA-Z:._-]*/g;
+
 function linkSegment(
   segment: string,
   gazetteer: Gazetteer,
@@ -56,10 +60,15 @@ function linkLine(
   linked: Set<string>,
 ): { text: string; added: number } {
   PROTECTED.lastIndex = 0;
+  CITATION.lastIndex = 0;
   let cursor = 0;
   let added = 0;
   let out = "";
-  for (const match of line.matchAll(PROTECTED)) {
+  const spans = [...line.matchAll(PROTECTED), ...line.matchAll(CITATION)].sort(
+    (a, b) => a.index! - b.index!,
+  );
+  for (const match of spans) {
+    if (match.index! < cursor) continue; // inside an already-consumed span
     const start = match.index!;
     if (start > cursor) {
       const result = linkSegment(line.slice(cursor, start), gazetteer, linked);

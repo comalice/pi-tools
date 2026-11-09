@@ -76,3 +76,13 @@ describe("entity link rendering", () => {
     assert.ok(html.includes("unknown entity"));
   });
 });
+
+describe("citation protection", () => {
+  it("never links inside typed source citations", () => {
+    const input = FRONT + "## Sources\n\n- pi:01a1b2eb-9c91-76fd-81ca-d7abdddb9e38:693346d1 — but Zephyr here links.";
+    const { text, added } = linkEntityMentions(input, gazetteer());
+    assert.equal(added, 1);
+    assert.ok(text.includes("- pi:01a1b2eb-9c91"), "citation prefix untouched");
+    assert.ok(text.includes("[[entity:Zephyr|Zephyr]]"));
+  });
+});
