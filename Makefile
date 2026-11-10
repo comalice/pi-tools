@@ -9,7 +9,7 @@ UNITS := pi-wiki-serve.service pi-memory-hub.service pi-memory-ingest.service pi
          pi-dream.service pi-dream.timer
 
 .PHONY: run ingest maintain dream status test \
-        install-systemd uninstall-systemd systemd-status
+        install-systemd uninstall-systemd systemd-status install-bin
 
 # --- Running things directly -------------------------------------------------
 
@@ -41,6 +41,14 @@ test: ## Full test suite
 
 $(SYSTEMD_USER_DIR):
 	mkdir -p $(SYSTEMD_USER_DIR)
+
+install-bin: ## Install pi-memory/pi-wiki/pi-dream shims into ~/.local/bin
+	@mkdir -p $(HOME)/.local/bin
+	@for cmd in memory wiki dream; do \
+	  sed 's|REPO|$(REPO)|g' deploy/bin/pi-$$cmd > $(HOME)/.local/bin/pi-$$cmd; \
+	  chmod +x $(HOME)/.local/bin/pi-$$cmd; \
+	  echo "installed $(HOME)/.local/bin/pi-$$cmd"; \
+	done
 
 install-systemd: $(SYSTEMD_USER_DIR) ## Install and enable user systemd units
 	@for unit in $(UNITS); do \

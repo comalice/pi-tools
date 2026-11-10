@@ -1,0 +1,3 @@
+#!/bin/bash
+# Shim for the dirac-pi-tools dream CLI. REPO is substituted by make install-bin.
+exec /usr/bin/node --experimental-strip-types REPO/src/dream/runner.ts "$@"
