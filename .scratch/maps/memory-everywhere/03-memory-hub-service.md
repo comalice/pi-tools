@@ -1,7 +1,7 @@
 # pi-memory-hub service
 
 **Type:** task
-**Status:** open
+**Status:** claimed
 **Blocked by:** Origin provenance column, Blob store + import surfaces
 
 ## Question
