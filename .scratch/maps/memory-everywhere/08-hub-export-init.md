@@ -2,7 +2,7 @@
 
 **Type:** task
 **Status:** open
-**Blocked by:** pi-memory-hub service
+**Blocked by:** pi-memory-hub service, Blob store + import surfaces
 
 ## Question
 

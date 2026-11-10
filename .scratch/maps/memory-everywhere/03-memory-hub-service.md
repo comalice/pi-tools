@@ -2,7 +2,7 @@
 
 **Type:** task
 **Status:** open
-**Blocked by:** Origin provenance column
+**Blocked by:** Origin provenance column, Blob store + import surfaces
 
 ## Question
 
