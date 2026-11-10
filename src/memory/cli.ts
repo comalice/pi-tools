@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expand, listSessions, openStore, status, SCHEMA_VERSION } from "./store.ts";
 import { ingestClaude, ingestGrok, ingestOpenCode, ingestPi, ingestWiki } from "./ingest.ts";
+import { backfillImports, forgetImport, importFiles } from "./blobs.ts";
 import { buildVectorIndex, refreshVectorIndex, searchMemory, vectorStatus } from "./semantic.ts";
 import { embedTexts, health, serviceUrls } from "./vector-client.ts";
 import { evaluateCases, readEvaluationCases } from "./evaluation.ts";
@@ -12,8 +13,9 @@ type Options = Record<string, string | string[]>;
 
 function parseArgs(argv: string[]) {
   const out: Options = {};
-  const flags = new Set(["--all", "--no-replies", "--rebuild"]);
+  const flags = new Set(["--all", "--no-replies", "--rebuild", "--backfill"]);
   let command = "";
+  const args: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg.startsWith("--")) {
@@ -34,10 +36,10 @@ function parseArgs(argv: string[]) {
     } else if (!command) {
       command = arg;
     } else {
-      throw new Error(`Unexpected argument: ${arg}`);
+      args.push(arg);
     }
   }
-  return { command, out };
+  return { command, out, args };
 }
 
 function value(out: Options, key: string): string | undefined {
@@ -103,20 +105,48 @@ process.once("SIGINT", () => operation.abort(new Error("Memory operation cancell
 process.once("SIGTERM", () => operation.abort(new Error("Memory operation cancelled")));
 
 try {
-  const { command, out } = parseArgs(process.argv.slice(2));
+  const { command, out, args } = parseArgs(process.argv.slice(2));
   const paths = defaults(out);
-  if (!command) throw new Error("Usage: memory <ingest|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
+  if (!command) throw new Error("Usage: memory <ingest|import|forget|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
+  if (command !== "import" && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+  const blobDirectory = path.join(path.dirname(paths.index), "blobs");
 
   if (command === "ingest") {
     only(out, ["--index", "--pi-sessions", "--opencode-db", "--wiki-dir", "--claude-exports", "--grok-exports"]);
     safeIndexLocation(paths.index, paths.pi, paths.opencode);
     const db = openStore(paths.index);
     try {
-      const sources = [ingestPi(db, paths.pi), ingestOpenCode(db, paths.opencode), ingestClaude(db, paths.claude), ingestGrok(db, paths.grok), ingestWiki(db, paths.wiki)];
+      const claudeRoot = (db.prepare("SELECT root FROM source_config WHERE source='claude'").get() as any)?.root ?? paths.claude;
+      const grokRoot = (db.prepare("SELECT root FROM source_config WHERE source='grok'").get() as any)?.root ?? paths.grok;
+      const sources = [ingestPi(db, paths.pi), ingestOpenCode(db, paths.opencode), ingestClaude(db, claudeRoot), ingestGrok(db, grokRoot), ingestWiki(db, paths.wiki)];
       emit({ ok: true, sources, status: status(db) });
     } finally {
       db.close();
     }
+  } else if (command === "import") {
+    only(out, ["--index", "--source", "--backfill"]);
+    safeIndexLocation(paths.index, paths.pi, paths.opencode);
+    if (out["--backfill"]) {
+      if (value(out, "--source") || args.length) throw new Error("memory import --backfill does not accept --source or file arguments");
+      const db = openStore(paths.index);
+      try { emit({ ok: true, backfill: backfillImports(db, blobDirectory) }); } finally { db.close(); }
+    } else {
+      const source = value(out, "--source");
+      if (source !== "claude" && source !== "grok") throw new Error("memory import requires --source claude|grok");
+      if (!args.length) throw new Error("memory import requires one or more file or directory paths");
+      const db = openStore(paths.index);
+      try { emit({ ok: true, ...importFiles(db, source, args, blobDirectory), status: status(db) }); } finally { db.close(); }
+    }
+  } else if (command === "forget") {
+    only(out, ["--index", "--source", "--session", "--file"]);
+    safeIndexLocation(paths.index, paths.pi, paths.opencode);
+    const source = value(out, "--source");
+    if (!source) throw new Error("memory forget requires --source claude|grok");
+    if (!value(out, "--session") && !value(out, "--file")) throw new Error("memory forget requires --session ID or --file PATH");
+    if (value(out, "--session") && value(out, "--file")) throw new Error("Specify exactly one of --session or --file");
+    if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}`);
+    const db = openStore(paths.index);
+    try { emit({ ok: true, ...forgetImport(db, { source, session: value(out, "--session"), file: value(out, "--file") }, blobDirectory) }); } finally { db.close(); }
   } else if (command === "sessions") {
     only(out, ["--index", "--since", "--limit"]);
     if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run: node --experimental-strip-types src/memory/cli.ts ingest`);

@@ -48,6 +48,10 @@ Run these from the repository root:
 
 ```sh
 npm run memory -- ingest
+npm run memory -- import --source claude ~/Downloads/claude-export.json
+npm run memory -- import --source grok ~/Downloads/grok-export/
+npm run memory -- import --backfill
+npm run memory -- forget --source claude --session SESSION_ID
 npm run memory -- status
 npm run memory -- sessions --since 7d
 npm run memory -- search --query 'deployment rollback' --cue 'SQLite WAL' --project "$PWD"
@@ -70,6 +74,40 @@ npm run memory -- evaluate --cases ~/.pi/agent/memory/retrieval-eval.json --cosi
 `--opencode-db FILE`, or `--wiki-dir DIR`. Missing sources are reported but
 are not fatal.
 
+### Watch sources and imported exports
+
+`pi`, `opencode`, and `wiki` remain watch sources: their registered live roots
+are reconciled, so removed source data is pruned on a later ingest (the wiki
+repository remains its own canonical store). Claude and Grok exports are
+import sources. `memory import --source claude|grok PATH...` copies the supplied
+files (or recursively walks supplied directories) into the archive-owned blob
+store, registers that store as the source root, and runs the existing adapter.
+Repeated imports deduplicate by SHA-256 content hash.
+
+Blobs live under `~/.pi/agent/memory/blobs/<source>/<origin>/` (beside the
+default archive). Each file is named
+`<sha256-of-bytes>--<sanitized-original-filename>`; the original extension is
+retained. `<origin>` uses `PI_MEMORY_ORIGIN` when set, otherwise the machine
+hostname, matching entry provenance; values that are not safe path components
+are encoded for the directory name. `source_files.file` is the manifest and
+points into this tree (Grok manifest keys also retain the adapter's `#session`
+suffix). No additional database schema is required. Blob directories/files
+are private (0700/0600).
+
+Existing Claude/Grok registrations must be migrated before their original
+export roots are retired. Run `memory import --backfill` while those registered
+roots still exist. Backfill copies their current files, maps every existing
+manifest row to exactly one blob by content hash, rewrites the manifest paths,
+and changes each registered root to its blob directory; an ambiguous or
+missing content match fails rather than partially rewriting the manifest.
+Then run `memory ingest` and verify it reports unchanged files and zero removed
+sessions. After a successful backfill, the original export directories are no
+longer load-bearing and may be moved or deleted. Future imports add blobs to
+the same source store. For import roots, a missing blob is not treated as a
+prune; use `memory forget --source claude|grok --session ID` (or `--file PATH`)
+to explicitly remove an imported item and its derived archive rows. The forget
+command only operates on sources registered in blob-store mode.
+
 Wiki pages are indexed as source `wiki`: one document per page, `session_id`
 set to the page slug, `role` set to `page`, `project` set to the constant
 `wiki`. Wiki pages are **curated cross-project knowledge**, so project-scoped
@@ -84,8 +122,9 @@ for the dream-mode sweep (`skills/dream`) and excludes wiki pages. Ingestion
 never writes to source archives. Pi files are parsed independently and read
 read-only; incomplete final JSONL records wait for the next complete newline.
 Changed complete snapshots are replaced transactionally. Malformed or
-unsupported snapshots do not prune valid entries. Deleted source files and
-sessions are removed on the next successful reconciliation.
+unsupported snapshots do not prune valid entries. Deleted files from watch roots (and legacy Claude/Grok roots until backfill)
+are removed on the next successful reconciliation. Once Claude/Grok are in
+blob-store mode, pruning is explicit via `memory forget`.
 
 OpenCode's `session`, `message`, and `part` projections are read-only, with
 `query_only`, a busy timeout, bounded per-session queries, and bounded message

@@ -9,6 +9,10 @@ const MAX_PI_FILE = 256 * 1024 * 1024;
 const MAX_LINE = 4 * 1024 * 1024;
 const MAX_OPENCODE_SESSIONS = 100_000;
 const hash = (s: Uint8Array) => createHash("sha256").update(s).digest("hex");
+function importBlobRoot(root: string, source: "claude" | "grok") {
+  const normalized = path.resolve(root);
+  return path.basename(normalized) === source && path.basename(path.dirname(normalized)) === "blobs";
+}
 function textContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -142,7 +146,19 @@ export function ingestClaude(db: DatabaseSync, root: string, opts: { origin?: st
   }
   const stale = (db.prepare("SELECT file,session_id FROM source_files WHERE source=?").all(source) as any[]).filter(r => !found.has(r.file));
   let removed = 0;
-  if (stale.length) transaction(db, () => { for (const row of stale) { db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source, row.file); const still = db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source, row.session_id); if (!still) { db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source, row.session_id); removed++; } } });
+  // Import roots are immutable payload stores: disappearance is not an
+  // instruction to forget. Drop obsolete manifest rows only when a live blob
+  // still backs the session; explicit memory forget removes the final rows.
+  if (stale.length) transaction(db, () => { for (const row of stale) {
+    if (importBlobRoot(root, source)) {
+      const live = (db.prepare("SELECT file FROM source_files WHERE source=? AND session_id=?").all(source, row.session_id) as any[]).some(item => found.has(item.file));
+      if (live) db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source, row.file);
+      continue;
+    }
+    db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source, row.file);
+    const still = db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source, row.session_id);
+    if (!still) { db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source, row.session_id); removed++; }
+  } });
   return { source, indexed, unchanged, removed, duplicates, errors };
 }
 
@@ -231,7 +247,8 @@ export function ingestGrok(db: DatabaseSync, root: string, opts: { origin?: stri
         if (st.isSymbolicLink()) throw new Error(`Symlink in Grok exports tree; refusing an incomplete snapshot: ${file}`);
         if (st.isDirectory()) { stack.push(file); continue; }
         if (!st.isFile() || !name.endsWith(".json")) continue;
-        if (/^prod-grok-backend.*\.json$/.test(name)) files.push(file);
+        const payloadName = name.replace(/^[a-f0-9]{64}--/, "");
+        if (/^prod-grok-backend.*\.json$/.test(payloadName)) files.push(file);
         else if (skipped.length < 100) skipped.push(file);
       }
     }
@@ -277,8 +294,7 @@ export function ingestGrok(db: DatabaseSync, root: string, opts: { origin?: stri
     indexed++;
   }
   // A row is stale when its file vanished, its session has no winner, or the
-  // session's winner lives in a different file (superseded snapshot). The
-  // winner's row keeps the session alive via the `still` check below.
+  // session's winner lives in a different file (superseded snapshot).
   const stale = (db.prepare("SELECT file,session_id FROM source_files WHERE source=?").all(source) as any[]).filter(r => {
     const hashAt = r.file.lastIndexOf("#");
     const baseFile = hashAt > 0 ? r.file.slice(0, hashAt) : r.file;
@@ -286,7 +302,17 @@ export function ingestGrok(db: DatabaseSync, root: string, opts: { origin?: stri
     return !found.has(baseFile) || !winner || winner.file !== baseFile;
   });
   let removed = 0;
-  if (stale.length) transaction(db, () => { for (const row of stale) { db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source, row.file); const still = db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source, row.session_id); if (!still) { db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source, row.session_id); removed++; } } });
+  if (stale.length) transaction(db, () => { for (const row of stale) {
+    if (importBlobRoot(root, source)) {
+      // A superseded Grok snapshot is stale metadata, but the session remains
+      // live in its elected winner. If no winner is available, preserve rows.
+      if (winners.has(row.session_id)) db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source, row.file);
+      continue;
+    }
+    db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source, row.file);
+    const still = db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source, row.session_id);
+    if (!still) { db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source, row.session_id); removed++; }
+  } });
   return { source, indexed, unchanged, removed, duplicates, skipped, errors };
 }
 
