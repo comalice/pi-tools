@@ -1,7 +1,7 @@
 # memory join onboarding
 
 **Type:** task
-**Status:** open
+**Status:** claimed
 **Blocked by:** pi-memory-hub service, Git hosting on the hub
 
 ## Question
