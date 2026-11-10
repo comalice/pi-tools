@@ -6,6 +6,7 @@ import { expand, listSessions, openStore, status, SCHEMA_VERSION } from "./store
 import { ingestClaude, ingestGrok, ingestOpenCode, ingestPi, ingestWiki } from "./ingest.ts";
 import { backfillImports, forgetImport, importFiles } from "./blobs.ts";
 import { pushSessions } from "./push.ts";
+import { memoryJoin, memoryJoinStatus } from "./join.ts";
 import { addHubToken, listHubTokens, revokeHubToken } from "./hub-tokens.ts";
 import { buildVectorIndex, refreshVectorIndex, searchMemory, vectorStatus } from "./semantic.ts";
 import { embedTexts, health, serviceUrls } from "./vector-client.ts";
@@ -15,7 +16,7 @@ type Options = Record<string, string | string[]>;
 
 function parseArgs(argv: string[]) {
   const out: Options = {};
-  const flags = new Set(["--all", "--no-replies", "--rebuild", "--backfill"]);
+  const flags = new Set(["--all", "--no-replies", "--rebuild", "--backfill", "--force", "--no-push", "--status"]);
   let command = "";
   const args: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -110,10 +111,25 @@ try {
   const { command, out, args } = parseArgs(process.argv.slice(2));
   const paths = defaults(out);
   if (!command) throw new Error("Usage: memory <ingest|import|forget|push|hub-token|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
-  if (command !== "import" && command !== "hub-token" && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+  if (command !== "import" && command !== "hub-token" && command !== "join" && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
   const blobDirectory = path.join(path.dirname(paths.index), "blobs");
 
-  if (command === "push") {
+  if (command === "join") {
+    only(out, ["--status", "--port", "--token", "--force", "--no-push"]);
+    if (out["--status"]) {
+      if (args.length || value(out, "--port") || value(out, "--token") || out["--force"] || out["--no-push"]) throw new Error("Usage: memory join --status");
+      const result = await memoryJoinStatus();
+      emit(result);
+      if (!result.ok) process.exitCode = 1;
+    } else {
+      if (args.length !== 1) throw new Error("Usage: memory join <hub-host> [--port 6342] --token <spoke-token> [--force] [--no-push]");
+      const token = value(out, "--token");
+      if (!token) throw new Error("memory join requires --token <spoke-token>");
+      const port = positiveInt(value(out, "--port"), "port", 6342, 1, 65535);
+      const result = await memoryJoin({ host: args[0], port, token, force: Boolean(out["--force"]), noPush: Boolean(out["--no-push"]) });
+      emit(result);
+    }
+  } else if (command === "push") {
     only(out, []);
     const push = await pushSessions({ agentDir: process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), sessionsDir: paths.pi });
     emit({ ok: push.failed === 0, push });

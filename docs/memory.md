@@ -375,6 +375,93 @@ responses. The endpoints are:
   snapshot; an exact re-push is deduplicated. Pushes are serialized
   in-process. OpenCode push is not supported.
 
+### Spoke onboarding
+
+Onboarding has four stages. The hub API and SSH Git hosting are separate:
+the spoke token authenticates HTTP memory requests, while a per-machine SSH
+key authenticates wiki Git access. `memory join` never creates accounts, edits
+hub files, runs sudo, or enrolls a key for you.
+
+#### 1. Prepare the hub
+
+On the hub, provision the dedicated `git` account with `git-shell` as its
+login shell and create the canonical bare repository at
+`/home/git/wiki.git`. The hub's working wiki clone should use that bare repo as
+its `origin`, so librarian commits can be pushed there. SSH must be reachable
+from spokes over the trusted private network (normally Nebula). Configure
+`pi-memory-hub` to listen on an address reachable on that network, not just
+loopback, while keeping the plain-HTTP API off untrusted networks.
+
+Create one API token for the intended spoke on the hub and copy its output
+securely; it is shown only when created:
+
+```sh
+npm run memory -- hub-token add laptop.example
+```
+
+The spoke identity returned by `/status` is the token's configured spoke name.
+Use that name deliberately: pushed sessions are attributed to it.
+
+#### 2. Join from the spoke
+
+From the spoke, use the hub's Nebula IP or resolvable host name (without a
+scheme or port). `--port` is the HTTP API port; SSH uses its normal port and
+connects via the `memory-hub` SSH alias.
+
+```sh
+pi-memory join 100.64.0.12 --port 6342 --token '<spoke-token>'
+```
+
+The command first verifies authenticated `GET /status` and prints the spoke
+identity assigned by the hub. It then writes the private
+`~/.pi/agent/memory/hub.json` (mode 0600), updates only its clearly marked
+`Host memory-hub` block in `~/.ssh/config`, and clones
+`git@memory-hub:wiki.git` into `~/.pi/agent/wiki`. An existing wiki checkout
+with that exact origin is fetched and fast-forwarded; a checkout with another
+origin is left untouched and reported as a likely migration or mistake. An
+existing `hub.json` is never replaced implicitly. Use `--force` only when
+intentionally changing/reasserting the hub pointer; the old file is backed up
+next to it. Use `--no-push` to skip timer installation.
+
+#### 3. Enroll the spoke SSH key (human step)
+
+If the wiki clone reports SSH `Permission denied (publickey)`, the HTTP setup
+has succeeded but Git access has not. On the spoke, generate a keypair if
+needed, then provide its public key to the hub administrator:
+
+```sh
+ssh-keygen -t ed25519 -C "$(hostname)"   # only if ~/.ssh/id_ed25519 does not exist
+cat ~/.ssh/id_ed25519.pub
+```
+
+The operator must append the public-key line to
+`/home/git/.ssh/authorized_keys` on the hub, one line per spoke, with the
+comment set to the spoke hostname. Do not paste or transfer the private key.
+This is intentionally a manual enrollment step; `pi-memory join` does not
+attempt privileged commands. After enrollment, rerun the join so the wiki
+clone can complete (use `--force` because the first attempt already stored
+`hub.json`):
+
+```sh
+pi-memory join 100.64.0.12 --port 6342 --token '<spoke-token>' --force
+```
+
+#### 4. Verify
+
+Check that the configured hub is reachable and confirms the expected identity:
+
+```sh
+pi-memory join --status
+```
+
+The normal join installs and enables `pi-memory-push.timer`; it pushes local
+Pi sessions every 15 minutes. Check timer state with
+`systemctl --user status pi-memory-push.timer`. To test immediately, run
+`pi-memory push`; the hub records the spoke identity from the token. Remote
+`memory_search` and `memory_expand` calls use the hub as soon as `hub.json`
+exists. `join --status` verifies API access; it does not test Git key access or
+push a session.
+
 ### Spoke push
 
 On a spoke, `memory push` sends recursively discovered `*.jsonl` files from
@@ -386,9 +473,9 @@ origin, so the spoke does not send or choose `origin`.
 The command reads `~/.pi/agent/memory/hub.json` (under
 `PI_CODING_AGENT_DIR` when set), in the form
 `{"hub":"http://<host>:<port>","token":"..."}`. It reports that `memory
-join` must be run first when the file is absent. The join workflow is handled
-separately. Hub URLs must be an HTTP(S) origin without a path; redirects are
-rejected so the bearer token is not forwarded elsewhere.
+join` must be run first when the file is absent. Hub URLs must be an HTTP(S)
+origin without a path; redirects are rejected so the bearer token is not
+forwarded elsewhere.
 
 Incrementality is tracked in `~/.pi/agent/memory/push-state.json`, mode 0600.
 Each relative session path has its byte size, modification time, and full

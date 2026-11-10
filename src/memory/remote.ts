@@ -46,6 +46,44 @@ export function loadMemoryHubConfig(filename = memoryHubConfigPath()): MemoryHub
   return { hub: url.origin, token: config.token };
 }
 
+export interface MemoryHubStatus {
+  ok: true;
+  version: string;
+  schema: number;
+  sources: unknown;
+  uptime: number;
+  spoke: string;
+}
+
+export async function getMemoryHubStatus(config: MemoryHubConfig, signal?: AbortSignal): Promise<MemoryHubStatus> {
+  const timeout = AbortSignal.timeout(MEMORY_HUB_REQUEST_TIMEOUT_MS);
+  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  let response: Response;
+  try {
+    response = await fetch(`${config.hub}/status`, {
+      method: "GET",
+      redirect: "error",
+      headers: { authorization: `Bearer ${config.token}`, accept: "application/json" },
+      signal: requestSignal,
+    });
+  } catch (error) {
+    const reason = requestSignal.aborted && timeout.aborted ? `request timed out after ${MEMORY_HUB_REQUEST_TIMEOUT_MS / 1000} seconds` : (error as Error).message;
+    throw new Error(`Memory hub ${config.hub} status request failed: ${reason}`);
+  }
+  let value: any;
+  try { value = await response.json(); } catch {
+    throw new Error(`Memory hub ${config.hub} returned HTTP ${response.status} with an invalid JSON status response`);
+  }
+  if (!response.ok) {
+    const message = typeof value?.error === "string" ? value.error : response.statusText;
+    throw new Error(`Memory hub ${config.hub} returned HTTP ${response.status}${message ? `: ${message}` : ""}`);
+  }
+  if (!value || typeof value !== "object" || value.ok !== true || typeof value.spoke !== "string" || !value.spoke) {
+    throw new Error(`Memory hub ${config.hub} returned an invalid status response`);
+  }
+  return value as MemoryHubStatus;
+}
+
 export async function postMemoryHub<T>(
   config: MemoryHubConfig,
   endpoint: "search" | "expand",
