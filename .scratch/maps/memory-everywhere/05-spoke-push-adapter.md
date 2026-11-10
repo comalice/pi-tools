@@ -1,7 +1,7 @@
 # Spoke push adapter + timer
 
 **Type:** task
-**Status:** open
+**Status:** claimed
 **Blocked by:** pi-memory-hub service
 
 ## Question
