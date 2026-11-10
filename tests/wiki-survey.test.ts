@@ -23,7 +23,7 @@ describe("librarian survey", () => {
     const db = openStore(index);
     replaceSession(db, "pi", "sess-real", "/p", [
       { entry_id: "e1", parent_id: null, role: "user", kind: "message", timestamp: null, text: "wal checkpoint tuning discussion", indexable: true },
-    ]);
+    ], { origin: "survey-spoke" });
     db.close();
 
     const staging = (name: string, slug: string, title: string, sources: string[]) =>
@@ -46,6 +46,7 @@ describe("librarian survey", () => {
     const bySlug = Object.fromEntries(survey.entries.map(e => [e.slug, e]));
 
     assert.equal(bySlug["wal-checkpoint-tuning"].citations[0].status, "ok");
+    assert.equal(bySlug["wal-checkpoint-tuning"].citations[0].origin, "survey-spoke");
     assert.equal(bySlug["wal-checkpoint-gotchas"].citations[0].status, "broken");
     assert.match(bySlug["wal-checkpoint-gotchas"].suggestion, /discard candidate/);
     assert.equal(bySlug["spi-voltage-frequency"].citations[0].status, "unchecked");

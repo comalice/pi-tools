@@ -249,7 +249,7 @@ export async function searchMemory(db: DatabaseSync, index: string, input: Searc
       for (const [key, value] of lexById) fused.set(key, { row: value.row, score: 1 / (RRF_K + value.rank), excerpt: value.row.excerpt });
     }
     const floor = input.cosineFloor ?? 0.75;
-    const verify = db.prepare("SELECT result_id,source,session_id,project,entry_id,role,timestamp,text FROM documents WHERE result_id=?");
+    const verify = db.prepare("SELECT d.result_id,d.source,d.session_id,d.project,d.entry_id,d.role,d.timestamp,d.text,e.origin FROM documents d JOIN entries e ON e.source=d.source AND e.session_id=d.session_id AND e.entry_id=d.entry_id WHERE d.result_id=?");
     for (const [key, value] of vectorMap) {
       if (value.similarity < floor) continue;
       const row = verify.get(key) as any;
@@ -286,7 +286,8 @@ export async function searchMemory(db: DatabaseSync, index: string, input: Searc
         text_length: value.row.text_length ?? text.length,
         score: value.score + cueCoverage * 0.01,
         cueCoverage,
-        provenance: { source: value.row.source, sessionId: value.row.session_id, project: value.row.project, entryId: value.row.entry_id, resultId: value.row.result_id },
+        origin: value.row.origin,
+        provenance: { source: value.row.source, sessionId: value.row.session_id, project: value.row.project, entryId: value.row.entry_id, resultId: value.row.result_id, origin: value.row.origin },
       };
     }).sort((a, b) => b.score - a.score).slice(0, limit);
     return { results: enrichWikiLinks(db, results), retrieval: { mode: mode === "semantic" ? "semantic" : "hybrid", status: "ok", elapsedMs: Date.now() - started, candidates: vectorMap.size, lexicalCandidates: lexicalRows.length, cosineFloor: floor } };

@@ -67,7 +67,7 @@ describe("memory integration regressions", () => {
   });
 
   it("executes registered Pi tools through the real worker without a model call", async () => {
-    replaceSession(database, "pi", "previous-session", "/project", [entry("u", "synthetic alpha beta decision")]);
+    replaceSession(database, "pi", "previous-session", "/project", [entry("u", "synthetic alpha beta decision")], { origin: "integration-spoke" });
     const previousIndex = process.env.PI_MEMORY_INDEX;
     process.env.PI_MEMORY_INDEX = filename;
     try {
@@ -78,10 +78,14 @@ describe("memory integration regressions", () => {
       const controller = new AbortController();
       const found = await tools.get("memory_search").execute("call-search", { query: "alpha", cues: ["beta"] }, controller.signal, undefined, context);
       assert.equal(found.details.results.length, 1);
+      assert.equal(found.details.results[0].origin, "integration-spoke");
+      assert.match(found.content[0].text, /origin integration-spoke/);
       assert.equal(found.details.origin, "durable-memory");
       assert.equal(found.details.indexable, false);
       const expanded = await tools.get("memory_expand").execute("call-expand", { id: found.details.results[0].id }, controller.signal, undefined, context);
       assert.match(expanded.content[0].text, /synthetic alpha beta decision/);
+      assert.match(expanded.content[0].text, /origin integration-spoke/);
+      assert.equal(expanded.details.provenance.origin, "integration-spoke");
       const otherContext = { ...context, cwd: "/other-project" };
       await assert.rejects(tools.get("memory_expand").execute("out-of-scope", { id: found.details.results[0].id }, controller.signal, undefined, otherContext), /outside selected/);
     } finally {

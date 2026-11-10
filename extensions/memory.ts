@@ -114,11 +114,11 @@ export default function (pi: ExtensionAPI) {
         const links = r.source === "wiki" && (r.page_links?.length || r.linked_from?.length)
           ? `\n  pages → ${(r.page_links ?? []).join(", ") || "—"} · linked from ← ${(r.linked_from ?? []).join(", ") || "—"}`
           : "";
-        return `${i + 1}. [${r.source === "wiki" ? "curated wiki" : "historical evidence"}] ${r.role} — ${r.project} — ${r.session_id} — result ${r.result_id}\n${r.excerpt}${links}`;
+        return `${i + 1}. [${r.source === "wiki" ? "curated wiki" : "historical evidence"}] ${r.role} — ${r.project} — ${r.session_id} — origin ${r.origin} — result ${r.result_id}\n${r.excerpt}${links}`;
       }).join("\n\n") : "No matching archived memories.");
       return {
         content: [{ type: "text", text }],
-        details: { origin: "durable-memory", indexable: false, scope: params.scope ?? "project", retrieval, archive: { latest: archiveLatest }, results: results.map(r => ({ id: r.result_id, source: r.source, sessionId: r.session_id, entryId: r.entry_id, project: r.project, role: r.role, provenance: r.provenance, ...(r.page_links ? { pageLinks: r.page_links, linkedFrom: r.linked_from } : {}) })) },
+        details: { origin: "durable-memory", indexable: false, scope: params.scope ?? "project", retrieval, archive: { latest: archiveLatest }, results: results.map(r => ({ id: r.result_id, source: r.source, sessionId: r.session_id, entryId: r.entry_id, project: r.project, role: r.role, origin: r.origin, provenance: r.provenance, ...(r.page_links ? { pageLinks: r.page_links, linkedFrom: r.linked_from } : {}) })) },
       };
     },
   });

@@ -47,7 +47,7 @@ function parseArgs(argv: string[]) {
 }
 
 type SessionStatus = "pending" | "running" | "done" | "failed" | "skipped";
-type SessionState = { status: SessionStatus; source: string; project: string; file: string; first?: string; last?: string; attempts?: number; startedAt?: string; finishedAt?: string; summary?: string; error?: string };
+type SessionState = { status: SessionStatus; source: string; project: string; file: string; origin?: string; first?: string; last?: string; attempts?: number; startedAt?: string; finishedAt?: string; summary?: string; error?: string };
 type State = { startedAt: string; model: string; since: string; token: string; done: boolean; sessions: Record<string, SessionState> };
 
 const config = parseArgs(process.argv.slice(2));
@@ -88,13 +88,13 @@ function enumerate() {
       if (existing && existing.status !== "pending") continue;
       const file = row.source === "opencode" ? opencodeRoot : row.file;
       if (!ENTRY_ID_FORMAT[row.source] || !file || !existsSync(file)) {
-        state.sessions[row.session_id] = { status: "skipped", source: row.source, project: row.project, file: row.file ?? "", error: "no readable session file for this source" };
+        state.sessions[row.session_id] = { status: "skipped", source: row.source, project: row.project, file: row.file ?? "", origin: row.origin, error: "no readable session file for this source" };
         continue;
       }
       row.file = file;
       if (considered >= config.max) continue;
       considered++;
-      state.sessions[row.session_id] = { status: "pending", source: row.source, project: row.project, file: row.file, first: row.first, last: row.last };
+      state.sessions[row.session_id] = { status: "pending", source: row.source, project: row.project, file: row.file, origin: row.origin, first: row.first, last: row.last };
     }
   } finally { db.close(); }
   // A resumed invocation with fresh work starts a new run.
@@ -202,14 +202,14 @@ function page(): string {
   const rows = Object.entries(state.sessions)
     .sort((a, b) => (a[1].startedAt ?? "").localeCompare(b[1].startedAt ?? ""))
     .reverse()
-    .map(([id, s]) => `<tr class="${s.status}"><td>${escapeHtml(s.status)}</td><td>${escapeHtml(s.source)}</td><td title="${escapeHtml(id)}">${escapeHtml(id.slice(0, 8))}</td><td>${escapeHtml(s.project)}</td><td>${escapeHtml(s.startedAt?.slice(11, 19) ?? "")}</td><td>${escapeHtml(s.finishedAt?.slice(11, 19) ?? "")}</td><td>${escapeHtml(s.error ?? "")}</td></tr>`)
+    .map(([id, s]) => `<tr class="${s.status}"><td>${escapeHtml(s.status)}</td><td>${escapeHtml(s.source)}</td><td title="${escapeHtml(id)}">${escapeHtml(id.slice(0, 8))}</td><td>${escapeHtml(s.project)}</td><td>${escapeHtml(s.origin ?? "")}</td><td>${escapeHtml(s.startedAt?.slice(11, 19) ?? "")}</td><td>${escapeHtml(s.finishedAt?.slice(11, 19) ?? "")}</td><td>${escapeHtml(s.error ?? "")}</td></tr>`)
     .join("\n");
   return `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>dream runner</title>
 <style>body{font:14px system-ui;margin:2rem}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:4px 8px;text-align:left}.running{background:#fff3cd}.failed{background:#f8d7da}.done{background:#d4edda}.skipped{color:#888}</style>
 <h1>dream runner</h1>
 <p>model <b>${escapeHtml(state.model)}</b> · window <b>${escapeHtml(state.since)}</b> · started ${escapeHtml(state.startedAt)} · ${state.done ? `<b>complete</b> at ${escapeHtml(finishedAt ?? "")}` : "<b>running</b>"}</p>
 <p>${Object.entries(counts).map(([k, v]) => `${k}: <b>${v}</b>`).join(" · ")}</p>
-<table><tr><th>status</th><th>source</th><th>session</th><th>project</th><th>started</th><th>finished</th><th>error</th></tr>${rows}</table>`;
+<table><tr><th>status</th><th>source</th><th>session</th><th>project</th><th>origin</th><th>started</th><th>finished</th><th>error</th></tr>${rows}</table>`;
 }
 
 function startServer(port: number, bind: string, attempt = 0) {

@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 const execute = promisify(execFile);
 
 function validProvenance(value: any) {
-  return value && ["pi", "opencode", "claude", "grok", "wiki"].includes(value.source) && typeof value.sessionId === "string" && value.sessionId.length <= 200 && typeof value.project === "string" && value.project.length <= 4096 && typeof value.entryId === "string" && value.entryId.length <= 200 && typeof value.resultId === "string" && value.resultId.length <= 64;
+  return value && ["pi", "opencode", "claude", "grok", "wiki"].includes(value.source) && typeof value.sessionId === "string" && value.sessionId.length <= 200 && typeof value.project === "string" && value.project.length <= 4096 && typeof value.entryId === "string" && value.entryId.length <= 200 && typeof value.resultId === "string" && value.resultId.length <= 64 && typeof value.origin === "string" && value.origin.length > 0 && value.origin.length <= 255;
 }
 
 export async function runMemoryWorker<T = any>(
@@ -44,12 +44,12 @@ export async function runMemoryWorker<T = any>(
         if (!row || !["pi", "opencode", "claude", "grok", "wiki"].includes(row.source) || !["user", "assistant", "page"].includes(row.role) ||
             !["result_id", "session_id", "entry_id", "project", "excerpt"].every(key => typeof row[key] === "string") ||
             row.result_id.length > 64 || row.session_id.length > 200 || row.entry_id.length > 200 || row.project.length > 4096 ||
-            row.excerpt.length > 480 || Object.hasOwn(row, "text") || !Number.isFinite(row.score) ||
+            row.excerpt.length > 480 || typeof row.origin !== "string" || row.origin.length < 1 || row.origin.length > 255 || Object.hasOwn(row, "text") || !Number.isFinite(row.score) ||
             !Number.isSafeInteger(row.snippet_start) || !Number.isSafeInteger(row.snippet_end) || row.snippet_start < 0 ||
             row.snippet_end < row.snippet_start || row.snippet_end - row.snippet_start !== row.excerpt.length ||
             !Number.isSafeInteger(row.text_length) || row.text_length > 100_000 || row.snippet_end > row.text_length ||
             !validProvenance(row.provenance) || row.provenance.source !== row.source || row.provenance.sessionId !== row.session_id ||
-            row.provenance.project !== row.project || row.provenance.entryId !== row.entry_id || row.provenance.resultId !== row.result_id) {
+            row.provenance.project !== row.project || row.provenance.entryId !== row.entry_id || row.provenance.resultId !== row.result_id || row.provenance.origin !== row.origin) {
           throw new Error("Memory worker returned an invalid or oversized search result");
         }
       }
@@ -66,9 +66,9 @@ export async function runMemoryWorker<T = any>(
       const result = parsed.result;
       if (!result || !["pi", "opencode", "claude", "grok", "wiki"].includes(result.source) || typeof result.text !== "string" || result.text.length > 8000 ||
           typeof result.sessionId !== "string" || result.sessionId.length > 200 || typeof result.entryId !== "string" || result.entryId.length > 200 ||
-          typeof result.project !== "string" || result.project.length > 4096 || !result.branch || typeof result.branch !== "object" ||
+          typeof result.project !== "string" || result.project.length > 4096 || typeof result.origin !== "string" || result.origin.length < 1 || result.origin.length > 255 || !result.branch || typeof result.branch !== "object" ||
           !validProvenance(result.provenance) || result.provenance.source !== result.source || result.provenance.sessionId !== result.sessionId ||
-          result.provenance.project !== result.project || result.provenance.entryId !== result.entryId || result.provenance.resultId !== result.id ||
+          result.provenance.project !== result.project || result.provenance.entryId !== result.entryId || result.provenance.resultId !== result.id || result.provenance.origin !== result.origin ||
           !Number.isSafeInteger(result.offset) || result.offset < 0 || result.nextOffset !== null && !Number.isSafeInteger(result.nextOffset) ||
           typeof result.truncated !== "boolean" || typeof result.repliesTruncated !== "boolean" ||
           result.nextResultId !== null && (typeof result.nextResultId !== "string" || result.nextResultId.length > 64) ||

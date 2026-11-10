@@ -89,6 +89,7 @@ describe("wiki front-end", () => {
     assert.equal(results.status, 200);
     assert.match(results.text, /old-page/);
     assert.match(results.text, /1 result/);
+    assert.match(results.text, /origin/);
 
     // The session viewer renders archived messages and the page's sources link into it.
     const sessionView = await get(`/${token}/session/pi/sess-abc`);
@@ -96,6 +97,7 @@ describe("wiki front-end", () => {
     assert.match(sessionView.text, /how do checkpoints work/);
     assert.match(sessionView.text, /spread them with max_wal_size/);
     assert.match(sessionView.text, /id="e2"/);
+    assert.match(sessionView.text, /origin /);
     assert.equal((await get(`/${token}/session/pi/nope`)).status, 404);
     const oldPage = await get(`/${token}/page/old-page`);
     assert.match(oldPage.text, /href="\/[a-f0-9-]+\/session\/pi\/s#e"/);

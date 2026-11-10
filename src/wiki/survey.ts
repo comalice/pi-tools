@@ -16,7 +16,7 @@ export interface SurveyEntry {
   title: string;
   tags: string[];
   sources: string[];
-  citations: { source: string; status: "ok" | "broken" | "unchecked" }[];
+  citations: { source: string; status: "ok" | "broken" | "unchecked"; origin?: string }[];
   brokenCitations: number;
   parseError?: string;
   cluster: number | null;
@@ -62,19 +62,25 @@ export function runSurvey(wikiDir: string, index: string): Survey {
     db = new DatabaseSync(index, { readOnly: true });
     db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000;");
   }
-  const entryExists = db ? db.prepare("SELECT 1 FROM entries WHERE source=? AND session_id=? AND entry_id=? LIMIT 1") : null;
+  const entryOrigin = db ? db.prepare("SELECT origin FROM entries WHERE source=? AND session_id=? AND entry_id=? LIMIT 1") : null;
   const sessionExists = db ? db.prepare("SELECT 1 FROM sessions WHERE source=? AND session_id=? LIMIT 1") : null;
+  const sessionOrigin = db ? db.prepare("SELECT origin FROM entries WHERE source=? AND session_id=? LIMIT 1") : null;
   const pageSet = new Set(existingPages);
 
-  function checkCitation(source: string): "ok" | "broken" | "unchecked" {
+  function checkCitation(source: string): { status: "ok" | "broken" | "unchecked"; origin?: string } {
     const match = source.match(/^(pi|opencode|claude):([^:]+)(?::(.+))?$/);
     if (match) {
-      if (!entryExists || !sessionExists) return "unchecked";
-      if (match[3]) return entryExists.get(match[1], match[2], match[3]) ? "ok" : "broken";
-      return sessionExists.get(match[1], match[2]) ? "ok" : "broken";
+      if (!entryOrigin || !sessionExists || !sessionOrigin) return { status: "unchecked" };
+      if (match[3]) {
+        const entry = entryOrigin.get(match[1], match[2], match[3]) as any;
+        return entry ? { status: "ok", origin: entry.origin } : { status: "broken" };
+      }
+      if (!sessionExists.get(match[1], match[2])) return { status: "broken" };
+      const origin = (sessionOrigin.get(match[1], match[2]) as any)?.origin;
+      return { status: "ok", ...(origin ? { origin } : {}) };
     }
-    if (source.startsWith("wiki:")) return pageSet.has(source.slice(5)) ? "ok" : "broken";
-    return "unchecked"; // doc:, web: — not verifiable here
+    if (source.startsWith("wiki:")) return { status: pageSet.has(source.slice(5)) ? "ok" : "broken" };
+    return { status: "unchecked" }; // doc:, web: — not verifiable here
   }
 
   const entries: SurveyEntry[] = [];
@@ -92,7 +98,7 @@ export function runSurvey(wikiDir: string, index: string): Survey {
       continue;
     }
     for (const tag of meta.tags) tagVocabulary[tag] = (tagVocabulary[tag] ?? 0) + 1;
-    const citations = meta.sources.map(source => ({ source, status: checkCitation(source) }));
+    const citations = meta.sources.map(source => ({ source, ...checkCitation(source) }));
     const brokenCitations = citations.filter(c => c.status === "broken").length;
     entries.push({ file, slug: meta.slug, title: meta.title, tags: meta.tags, sources: meta.sources, citations, brokenCitations, cluster: null, suggestion: "" });
   }

@@ -425,12 +425,12 @@ ${db ? (total > 500 ? `<p class="banner">Showing first 500 of ${total} mention d
       if (!db) return send(chrome("session — wiki", token, `<p>The memory archive is not available; run <code>memory ingest</code>.</p>`));
       const meta = db.prepare("SELECT project, title FROM sessions WHERE source=? AND session_id=?").get(source, sessionId) as any;
       if (!meta) return notFound();
-      const rows = db.prepare("SELECT entry_id, role, timestamp, text FROM entries WHERE source=? AND session_id=? AND indexable=1 AND text<>'' ORDER BY rowid LIMIT 1000").all(source, sessionId) as any[];
+      const rows = db.prepare("SELECT entry_id, role, timestamp, text, origin FROM entries WHERE source=? AND session_id=? AND indexable=1 AND text<>'' ORDER BY rowid LIMIT 1000").all(source, sessionId) as any[];
       const total = (db.prepare("SELECT COUNT(*) AS n FROM entries WHERE source=? AND session_id=? AND indexable=1 AND text<>''").get(source, sessionId) as any)?.n ?? 0;
       const CLAMP = 8000;
       const entries = rows.map(row => {
         const text = row.text.length > CLAMP ? `${row.text.slice(0, CLAMP)}\n… [clamped, ${row.text.length - CLAMP} more characters]` : row.text;
-        return `<section class="entry ${escapeHtml(row.role)}" id="${escapeHtml(row.entry_id)}"><div class="head"><b>${escapeHtml(row.role)}</b> · ${escapeHtml(row.timestamp ?? "undated")} · <code>${escapeHtml(row.entry_id)}</code></div><pre>${escapeHtml(text)}</pre></section>`;
+        return `<section class="entry ${escapeHtml(row.role)}" id="${escapeHtml(row.entry_id)}"><div class="head"><b>${escapeHtml(row.role)}</b> · ${escapeHtml(row.timestamp ?? "undated")} · origin ${escapeHtml(row.origin)} · <code>${escapeHtml(row.entry_id)}</code></div><pre>${escapeHtml(text)}</pre></section>`;
       }).join("\n");
       return send(chrome(`session ${sessionId.slice(0, 12)} — wiki`, token, `
 <h1>${escapeHtml(meta.title ?? sessionId)}</h1>
@@ -446,10 +446,10 @@ ${entries || "<p>No indexed messages in this session.</p>"}`));
       const db = getArchive();
       if (!db) return send(chrome("search — wiki", token, `<p>The memory archive is not available at <code>${escapeHtml(index)}</code>; run <code>memory ingest</code>.</p>`));
       const results = search(db, { query, source: "wiki", scope: "all", limit: 20 });
-      const rows = results.map(r => `<tr><td><a href="/${token}/page/${escapeHtml(r.session_id)}">${escapeHtml(r.session_id)}</a></td><td>${escapeHtml(r.excerpt)}</td></tr>`).join("\n");
+      const rows = results.map(r => `<tr><td><a href="/${token}/page/${escapeHtml(r.session_id)}">${escapeHtml(r.session_id)}</a></td><td>${escapeHtml(r.origin)}</td><td>${escapeHtml(r.excerpt)}</td></tr>`).join("\n");
       return send(chrome(`search: ${query} — wiki`, token, `
 <p>${results.length} result${results.length === 1 ? "" : "s"} for <b>${escapeHtml(query)}</b> (archive lexical search, wiki source).</p>
-<table><tr><th>page</th><th>excerpt</th></tr>${rows}</table>`));
+<table><tr><th>page</th><th>origin</th><th>excerpt</th></tr>${rows}</table>`));
     }
 
     return notFound();

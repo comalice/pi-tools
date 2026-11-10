@@ -1,7 +1,7 @@
 # Origin provenance column
 
 **Type:** task
-**Status:** open
+**Status:** claimed
 **Blocked by:** None
 
 ## Question

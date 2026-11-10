@@ -88,7 +88,7 @@ describe("wiki archive source", () => {
     const pageId = stableId("wiki", "sqlite-wal-gotchas", "page");
     const expanded = expand(db, pageId, { project: "/project-b", maxChars: 2000 });
     assert.ok(expanded);
-    assert.match(expanded.text, /\[curated wiki page; wiki; page;/);
+    assert.match(expanded.text, /\[curated wiki page; wiki; origin .+; page;/);
     assert.match(expanded.text, /WAL checkpoint tuning/);
     // Wiki pages are exempt from project scope in expand as well.
     assert.ok(expand(db, pageId, {}));
@@ -113,7 +113,7 @@ describe("wiki archive source", () => {
     const { wiki, db } = await wikiFixture();
     replaceSession(db, "pi", "recent", "/project", [
       { entry_id: "e1", parent_id: null, role: "user", kind: "message", timestamp: new Date().toISOString(), text: "fresh conversation", indexable: true },
-    ]);
+    ], { origin: "dream-spoke" });
     replaceSession(db, "pi", "ancient", "/project", [
       { entry_id: "e1", parent_id: null, role: "user", kind: "message", timestamp: "2020-01-01T00:00:00Z", text: "old conversation", indexable: true },
     ]);
@@ -124,6 +124,7 @@ describe("wiki archive source", () => {
     const sessions = listSessions(db, since);
     assert.deepEqual(sessions.map(row => row.session_id), ["recent"]);
     assert.equal(sessions[0].source, "pi");
+    assert.equal(sessions[0].origin, "dream-spoke");
     const everything = listSessions(db, "1970-01-01T00:00:00Z");
     assert.equal(everything.some(row => row.source === "wiki"), false);
     assert.equal(everything.some(row => row.session_id === "ancient"), true);

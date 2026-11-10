@@ -44,7 +44,7 @@ function walk(root:string):string[]{
   }
   return out.sort();
 }
-export function ingestPi(db:DatabaseSync,root:string){
+export function ingestPi(db:DatabaseSync,root:string,opts:{origin?:string}={}){
   const source="pi";const normalized=path.resolve(root);
   const configured=db.prepare("SELECT root FROM source_config WHERE source=?").get(source) as any;
   if(configured&&configured.root!==normalized)throw new Error(`Source ${source} is already registered at ${configured.root}; refusing to reconcile a different path`);
@@ -60,7 +60,7 @@ export function ingestPi(db:DatabaseSync,root:string){
     const duplicate=db.prepare("SELECT file FROM source_files WHERE source=? AND session_id=? AND file<>? LIMIT 1").get(source,sessionId,file) as any;
     if(duplicate)throw new Error(`Duplicate Pi session ID ${sessionId} in multiple files; snapshot left unchanged`);
     const project=data.header.cwd?path.resolve(String(data.header.cwd)):"unknown";
-    replaceFileSession(db,source,file,prior?.session_id,sessionId,project,data.entries,data.fingerprint,data.size);indexed++;
+    replaceFileSession(db,source,file,prior?.session_id,sessionId,project,data.entries,data.fingerprint,data.size,{origin:opts.origin});indexed++;
   }
   const stale=(db.prepare("SELECT file,session_id FROM source_files WHERE source=?").all(source) as any[]).filter(r=>!found.has(r.file));
   let removed=0;
@@ -102,7 +102,7 @@ function claudeRecords(file: string): { sessionId: string; entries: Entry[]; fin
   return { sessionId: data.uuid, entries, fingerprint: hash(bytes), size: bytes.length };
 }
 
-export function ingestClaude(db: DatabaseSync, root: string) {
+export function ingestClaude(db: DatabaseSync, root: string, opts: { origin?: string } = {}) {
   const source = "claude"; const normalized = path.resolve(root);
   const configured = db.prepare("SELECT root FROM source_config WHERE source=?").get(source) as any;
   if (configured && configured.root !== normalized) throw new Error(`Source ${source} is already registered at ${configured.root}; refusing to reconcile a different path`);
@@ -137,7 +137,7 @@ export function ingestClaude(db: DatabaseSync, root: string) {
     if (prior?.fingerprint === data.fingerprint) { unchanged++; continue; }
     const duplicate = db.prepare("SELECT file FROM source_files WHERE source=? AND session_id=? AND file<>? LIMIT 1").get(source, data.sessionId, file) as any;
     if (duplicate) { duplicates++; continue; }
-    replaceFileSession(db, source, file, prior?.session_id, data.sessionId, "claude", data.entries, data.fingerprint, data.size);
+    replaceFileSession(db, source, file, prior?.session_id, data.sessionId, "claude", data.entries, data.fingerprint, data.size, { origin: opts.origin });
     indexed++;
   }
   const stale = (db.prepare("SELECT file,session_id FROM source_files WHERE source=?").all(source) as any[]).filter(r => !found.has(r.file));
@@ -205,7 +205,7 @@ function grokRecords(file: string): { conversations: { sessionId: string; title:
   return { conversations, fingerprint: hash(bytes), size: bytes.length };
 }
 
-export function ingestGrok(db: DatabaseSync, root: string) {
+export function ingestGrok(db: DatabaseSync, root: string, opts: { origin?: string } = {}) {
   const source = "grok"; const normalized = path.resolve(root);
   const configured = db.prepare("SELECT root FROM source_config WHERE source=?").get(source) as any;
   if (configured && configured.root !== normalized) throw new Error(`Source ${source} is already registered at ${configured.root}; refusing to reconcile a different path`);
@@ -273,7 +273,7 @@ export function ingestGrok(db: DatabaseSync, root: string) {
     const prior = db.prepare("SELECT session_id,fingerprint FROM source_files WHERE source=? AND file=?").get(source, fileKey) as any;
     const convFingerprint = createHash("sha256").update(data.fingerprint).update("\0").update(sessionId).digest("hex");
     if (prior?.fingerprint === convFingerprint) { unchanged++; continue; }
-    replaceFileSession(db, source, fileKey, prior?.session_id, sessionId, "grok", winner.conv.entries, convFingerprint, data.size, { title: winner.conv.title ?? undefined });
+    replaceFileSession(db, source, fileKey, prior?.session_id, sessionId, "grok", winner.conv.entries, convFingerprint, data.size, { title: winner.conv.title ?? undefined, origin: opts.origin });
     indexed++;
   }
   // A row is stale when its file vanished, its session has no winner, or the
@@ -306,7 +306,7 @@ function walkMarkdown(root: string): string[] {
 // Wiki pages are curated knowledge, indexed as source "wiki" with one entry per page:
 // session_id is the page slug, entry_id is "page", project is the constant "wiki".
 // Malformed pages are skipped and reported rather than failing the whole snapshot.
-export function ingestWiki(db: DatabaseSync, root: string) {
+export function ingestWiki(db: DatabaseSync, root: string, opts: { origin?: string } = {}) {
   const source = "wiki"; const normalized = path.resolve(root);
   const configured = db.prepare("SELECT root FROM source_config WHERE source=?").get(source) as any;
   if (configured && configured.root !== normalized) throw new Error(`Source ${source} is already registered at ${configured.root}; refusing to reconcile a different path`);
@@ -338,7 +338,7 @@ export function ingestWiki(db: DatabaseSync, root: string) {
     if (prior?.fingerprint === parsed.fingerprint) { unchanged++; continue; }
     const timestamp = Number.isNaN(Date.parse(parsed.page.meta.last_verified)) ? null : new Date(parsed.page.meta.last_verified).toISOString();
     const entries: Entry[] = [{ entry_id: "page", parent_id: null, role: "page", kind: "page", timestamp, text: indexableText(parsed.page), indexable: true, metadata: { tags: parsed.page.meta.tags, sources: parsed.page.meta.sources } }];
-    replaceFileSession(db, source, file, prior?.session_id, slug, "wiki", entries, parsed.fingerprint, parsed.size, { title: parsed.page.meta.title });
+    replaceFileSession(db, source, file, prior?.session_id, slug, "wiki", entries, parsed.fingerprint, parsed.size, { title: parsed.page.meta.title, origin: opts.origin });
     indexed++;
   }
   const stale = (db.prepare("SELECT file,session_id FROM source_files WHERE source=?").all(source) as any[]).filter(r => !found.has(r.file));
@@ -349,7 +349,7 @@ export function ingestWiki(db: DatabaseSync, root: string) {
 
 function cols(db:DatabaseSync,table:string):Set<string>{return new Set((db.prepare(`PRAGMA table_info(${table})`).all() as any[]).map(x=>x.name));}
 function readOnly(filename:string){const db=new DatabaseSync(filename,{readOnly:true,timeout:5000});db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000;");return db;}
-export function ingestOpenCode(db:DatabaseSync,filename:string){
+export function ingestOpenCode(db:DatabaseSync,filename:string,opts:{origin?:string}={}){
   const source="opencode";const normalized=path.resolve(filename);
   const configured=db.prepare("SELECT root FROM source_config WHERE source=?").get(source) as any;
   if(configured&&configured.root!==normalized)throw new Error(`Source ${source} is already registered at ${configured.root}; refusing to reconcile a different path`);
@@ -402,7 +402,7 @@ export function ingestOpenCode(db:DatabaseSync,filename:string){
         const seq=seqAvailable?src.prepare("SELECT seq FROM event_sequence WHERE aggregate_id=?").get(sess.id) as any:null;
         const fingerprint=hash(Buffer.from(JSON.stringify([sess,entries.map(e=>[e.entry_id,e.parent_id,e.role,e.text,e.indexable,e.timestamp,e.metadata]),seq?.seq??null])));
         const prior=db.prepare("SELECT fingerprint FROM source_files WHERE source=? AND file=?").get(source,sess.id) as any;
-        if(prior?.fingerprint!==fingerprint){replaceSession(db,source,sess.id,project,entries,{parentSession:sess.parent_id??undefined,revertMessage:boundary,sourceFile:{key:sess.id,fingerprint,size:entries.length}});indexed++;}
+        if(prior?.fingerprint!==fingerprint){replaceSession(db,source,sess.id,project,entries,{parentSession:sess.parent_id??undefined,revertMessage:boundary,sourceFile:{key:sess.id,fingerprint,size:entries.length},origin:opts.origin});indexed++;}
         src.exec("COMMIT");
       }catch(e){try{src.exec("ROLLBACK");}catch{}throw e;}
     }

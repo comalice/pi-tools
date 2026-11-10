@@ -2,8 +2,9 @@ import { DatabaseSync } from "node:sqlite";
 import { chmodSync, closeSync, existsSync, mkdirSync, lstatSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
+import { hostname } from "node:os";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export type Db = DatabaseSync;
 
 export function openStore(path: string): Db {
@@ -18,14 +19,14 @@ export function openStore(path: string): Db {
   const db = new DatabaseSync(path);
   try {
     const version = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-    if (version !== 0 && version !== SCHEMA_VERSION) throw new Error(`Unsupported memory index schema ${version}; expected ${SCHEMA_VERSION}`);
+    if (version !== 0 && version !== 2 && version !== SCHEMA_VERSION) throw new Error(`Unsupported memory index schema ${version}; expected ${SCHEMA_VERSION}`);
     if (!version && Number(db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get()?.n ?? 0) > 0) throw new Error("Unversioned non-empty SQLite file is not a memory index; refusing to modify it");
     chmodSync(path, 0o600);
     db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;");
     if (!version) transaction(db, () => db.exec(`CREATE TABLE source_files(source TEXT NOT NULL, file TEXT NOT NULL, session_id TEXT NOT NULL, fingerprint TEXT NOT NULL, size INTEGER NOT NULL, indexed_at TEXT NOT NULL, PRIMARY KEY(source,file));
       CREATE TABLE source_config(source TEXT PRIMARY KEY, root TEXT NOT NULL);
       CREATE TABLE sessions(source TEXT NOT NULL, session_id TEXT NOT NULL, project TEXT NOT NULL, title TEXT, parent_session TEXT, revert_message TEXT, PRIMARY KEY(source,session_id));
-      CREATE TABLE entries(source TEXT NOT NULL, session_id TEXT NOT NULL, entry_id TEXT NOT NULL, parent_id TEXT, role TEXT, kind TEXT NOT NULL, timestamp TEXT, text TEXT NOT NULL DEFAULT '', indexable INTEGER NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(source,session_id,entry_id));
+      CREATE TABLE entries(source TEXT NOT NULL, session_id TEXT NOT NULL, entry_id TEXT NOT NULL, parent_id TEXT, role TEXT, kind TEXT NOT NULL, timestamp TEXT, text TEXT NOT NULL DEFAULT '', indexable INTEGER NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', origin TEXT NOT NULL DEFAULT '${hostname().replace(/'/g, "''")}', PRIMARY KEY(source,session_id,entry_id));
       CREATE INDEX entry_session_parent ON entries(source,session_id,parent_id);
       CREATE TABLE documents(result_id TEXT PRIMARY KEY, source TEXT NOT NULL, session_id TEXT NOT NULL, project TEXT NOT NULL, entry_id TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, timestamp TEXT);
       CREATE VIRTUAL TABLE documents_fts USING fts5(text, content='documents', content_rowid='rowid', tokenize='unicode61');
@@ -33,6 +34,7 @@ export function openStore(path: string): Db {
       CREATE TRIGGER documents_ad AFTER DELETE ON documents BEGIN INSERT INTO documents_fts(documents_fts,rowid,text) VALUES('delete',old.rowid,old.text); END;
       CREATE TRIGGER documents_au AFTER UPDATE ON documents BEGIN INSERT INTO documents_fts(documents_fts,rowid,text) VALUES('delete',old.rowid,old.text); INSERT INTO documents_fts(rowid,text) VALUES(new.rowid,new.text); END;
       PRAGMA user_version=${SCHEMA_VERSION};`));
+    else if (version === 2) transaction(db, () => db.exec(`ALTER TABLE entries ADD COLUMN origin TEXT NOT NULL DEFAULT '${hostname().replace(/'/g, "''")}'; PRAGMA user_version=${SCHEMA_VERSION};`));
     return db;
   } catch (error) { db.close(); throw error; }
 }
@@ -48,22 +50,28 @@ export function registerSource(db: Db, source: string, root: string) {
   db.prepare("INSERT OR IGNORE INTO source_config(source,root) VALUES(?,?)").run(source, root);
 }
 export interface Entry { entry_id: string; parent_id: string | null; role: string | null; kind: string; timestamp: string | null; text: string; indexable: boolean; metadata?: unknown; }
-export function replaceSession(db: Db, source: string, sessionId: string, project: string, entries: Entry[], opts: {title?: string; parentSession?: string; revertMessage?: string; sourceFile?: {key:string; fingerprint:string; size:number}} = {}) {
+function resolveOrigin(origin?: string) {
+  const value = origin ?? process.env.PI_MEMORY_ORIGIN ?? hostname();
+  if (typeof value !== "string" || !value.trim() || value.length > 255) throw new Error("origin must contain 1 to 255 characters");
+  return value;
+}
+export function replaceSession(db: Db, source: string, sessionId: string, project: string, entries: Entry[], opts: {title?: string; parentSession?: string; revertMessage?: string; sourceFile?: {key:string; fingerprint:string; size:number}; origin?: string} = {}) {
   transaction(db, () => {
     db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, sessionId);
     db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source, sessionId);
     db.prepare("INSERT INTO sessions(source,session_id,project,title,parent_session,revert_message) VALUES(?,?,?,?,?,?) ON CONFLICT(source,session_id) DO UPDATE SET project=excluded.project,title=excluded.title,parent_session=excluded.parent_session,revert_message=excluded.revert_message").run(source, sessionId, project, opts.title ?? null, opts.parentSession ?? null, opts.revertMessage ?? null);
-    const insert = db.prepare("INSERT INTO entries(source,session_id,entry_id,parent_id,role,kind,timestamp,text,indexable,metadata) VALUES(?,?,?,?,?,?,?,?,?,?)");
+    const origin = resolveOrigin(opts.origin);
+    const insert = db.prepare("INSERT INTO entries(source,session_id,entry_id,parent_id,role,kind,timestamp,text,indexable,metadata,origin) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
     const doc = db.prepare("INSERT INTO documents(result_id,source,session_id,project,entry_id,role,text,timestamp) VALUES(?,?,?,?,?,?,?,?)");
     for (const e of entries) {
       const text = e.indexable ? e.text.slice(0, 100_000) : "";
-      insert.run(source, sessionId, e.entry_id, e.parent_id, e.role, e.kind, e.timestamp, text, e.indexable ? 1 : 0, JSON.stringify(e.metadata ?? {}));
+      insert.run(source, sessionId, e.entry_id, e.parent_id, e.role, e.kind, e.timestamp, text, e.indexable ? 1 : 0, JSON.stringify(e.metadata ?? {}), origin);
       if (text.trim()) doc.run(stableId(source, sessionId, e.entry_id), source, sessionId, project, e.entry_id, e.role ?? "unknown", text, e.timestamp);
     }
     if (opts.sourceFile) db.prepare("INSERT INTO source_files(source,file,session_id,fingerprint,size,indexed_at) VALUES(?,?,?,?,?,?) ON CONFLICT(source,file) DO UPDATE SET session_id=excluded.session_id,fingerprint=excluded.fingerprint,size=excluded.size,indexed_at=excluded.indexed_at").run(source, opts.sourceFile.key, sessionId, opts.sourceFile.fingerprint, opts.sourceFile.size, new Date().toISOString());
   });
 }
-export function replaceFileSession(db: Db, source: string, file: string, oldSession: string | undefined, sessionId: string, project: string, entries: Entry[], fingerprint: string, size: number, opts: {title?: string} = {}) {
+export function replaceFileSession(db: Db, source: string, file: string, oldSession: string | undefined, sessionId: string, project: string, entries: Entry[], fingerprint: string, size: number, opts: {title?: string; origin?: string} = {}) {
   transaction(db, () => {
     if (oldSession && oldSession !== sessionId) {
       db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, oldSession);
@@ -73,11 +81,12 @@ export function replaceFileSession(db: Db, source: string, file: string, oldSess
     db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, sessionId);
     db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source, sessionId);
     db.prepare("INSERT INTO sessions(source,session_id,project,title) VALUES(?,?,?,?) ON CONFLICT(source,session_id) DO UPDATE SET project=excluded.project,title=excluded.title").run(source, sessionId, project, opts.title ?? null);
-    const put = db.prepare("INSERT INTO entries(source,session_id,entry_id,parent_id,role,kind,timestamp,text,indexable,metadata) VALUES(?,?,?,?,?,?,?,?,?,?)");
+    const origin = resolveOrigin(opts.origin);
+    const put = db.prepare("INSERT INTO entries(source,session_id,entry_id,parent_id,role,kind,timestamp,text,indexable,metadata,origin) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
     const doc = db.prepare("INSERT INTO documents(result_id,source,session_id,project,entry_id,role,text,timestamp) VALUES(?,?,?,?,?,?,?,?)");
     for (const entry of entries) {
       const text = entry.indexable ? entry.text.slice(0, 100_000) : "";
-      put.run(source, sessionId, entry.entry_id, entry.parent_id, entry.role, entry.kind, entry.timestamp, text, entry.indexable ? 1 : 0, JSON.stringify(entry.metadata ?? {}));
+      put.run(source, sessionId, entry.entry_id, entry.parent_id, entry.role, entry.kind, entry.timestamp, text, entry.indexable ? 1 : 0, JSON.stringify(entry.metadata ?? {}), origin);
       if (text.trim()) doc.run(stableId(source, sessionId, entry.entry_id), source, sessionId, project, entry.entry_id, entry.role ?? "unknown", text, entry.timestamp);
     }
     db.prepare("INSERT INTO source_files(source,file,session_id,fingerprint,size,indexed_at) VALUES(?,?,?,?,?,?) ON CONFLICT(source,file) DO UPDATE SET session_id=excluded.session_id,fingerprint=excluded.fingerprint,size=excluded.size,indexed_at=excluded.indexed_at").run(source, file, sessionId, fingerprint, size, new Date().toISOString());
@@ -88,14 +97,14 @@ export function status(db: Db) { return { schema: SCHEMA_VERSION, sources: db.pr
 // Conversation sessions with indexed activity at or after sinceIso, most recent first.
 // Used by dream mode to sweep a time window; wiki pages are deliberately excluded.
 export function listSessions(db: Db, sinceIso: string, limit = 500) {
-  const rows = db.prepare(`SELECT s.source, s.session_id, s.project, s.title, MIN(e.timestamp) AS first, MAX(e.timestamp) AS last, COUNT(*) AS messages
+  const rows = db.prepare(`SELECT s.source, s.session_id, s.project, s.title, MIN(e.timestamp) AS first, MAX(e.timestamp) AS last, MIN(e.origin) AS origin, COUNT(*) AS messages
     FROM sessions s JOIN entries e ON e.source=s.source AND e.session_id=s.session_id
     WHERE s.source <> 'wiki' AND e.indexable=1 AND e.timestamp IS NOT NULL
     GROUP BY s.source, s.session_id
     HAVING MAX(e.timestamp) >= ?
     ORDER BY last DESC LIMIT ?`).all(sinceIso, limit) as any[];
   const fileFor = db.prepare("SELECT file FROM source_files WHERE source=? AND session_id=? LIMIT 1");
-  return rows.map(row => ({ source: row.source, session_id: row.session_id, project: row.project, title: row.title ?? null, first: row.first, last: row.last, messages: row.messages, file: (fileFor.get(row.source, row.session_id) as any)?.file ?? null }));
+  return rows.map(row => ({ source: row.source, session_id: row.session_id, project: row.project, title: row.title ?? null, first: row.first, last: row.last, origin: row.origin, messages: row.messages, file: (fileFor.get(row.source, row.session_id) as any)?.file ?? null }));
 }
 function queryTerms(s: string): string[] { return [...new Set((s.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []))].slice(0, 32); }
 function documentTerms(text: string) { return new Set(text.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []); }
@@ -114,7 +123,7 @@ export function search(db: Db, input: {query: string; cues?: string[]; limit?: n
   if (input.source) { filters.push("d.source=?"); filterArgs.push(input.source); }
   if (input.session) { filters.push("d.session_id=?"); filterArgs.push(input.session); }
   if (input.currentSession) { filters.push("d.session_id<>?"); filterArgs.push(input.currentSession); }
-  const base = `SELECT d.result_id,d.source,d.session_id,d.project,d.entry_id,d.role,d.text,d.timestamp,bm25(documents_fts) rank FROM documents_fts JOIN documents d ON d.rowid=documents_fts.rowid WHERE documents_fts MATCH ? ${filters.length ? "AND "+filters.join(" AND "):""} ORDER BY rank LIMIT 120`;
+  const base = `SELECT d.result_id,d.source,d.session_id,d.project,d.entry_id,d.role,d.text,d.timestamp,e.origin,bm25(documents_fts) rank FROM documents_fts JOIN documents d ON d.rowid=documents_fts.rowid JOIN entries e ON e.source=d.source AND e.session_id=d.session_id AND e.entry_id=d.entry_id WHERE documents_fts MATCH ? ${filters.length ? "AND "+filters.join(" AND "):""} ORDER BY rank LIMIT 120`;
   const statement = db.prepare(base);
   const candidateMap = new Map<string, any>();
   const addCandidates = (terms: string[], join: "OR"|"AND") => {
@@ -139,7 +148,7 @@ export function search(db: Db, input: {query: string; cues?: string[]; limit?: n
     if (start > 0 && start < r.text.length && /[\uD800-\uDBFF]/.test(r.text[start - 1]) && /[\uDC00-\uDFFF]/.test(r.text[start])) start--;
     let end = Math.min(r.text.length, start + 480);
     if (end < r.text.length && end > start && /[\uD800-\uDBFF]/.test(r.text[end - 1])) end--;
-    return { result_id:r.result_id, source:r.source, session_id:r.session_id, project:r.project, entry_id:r.entry_id, role:r.role, timestamp:r.timestamp, score:coverage*10+Math.min(10,queryHits), excerpt:r.text.slice(start,end), snippet_start:start, snippet_end:end, text_length:r.text.length, provenance:{source:r.source,sessionId:r.session_id,project:r.project,entryId:r.entry_id,resultId:r.result_id}, _rank:Number(r.rank) };
+    return { result_id:r.result_id, source:r.source, session_id:r.session_id, project:r.project, entry_id:r.entry_id, role:r.role, timestamp:r.timestamp, origin:r.origin, score:coverage*10+Math.min(10,queryHits), excerpt:r.text.slice(start,end), snippet_start:start, snippet_end:end, text_length:r.text.length, provenance:{source:r.source,sessionId:r.session_id,project:r.project,entryId:r.entry_id,resultId:r.result_id,origin:r.origin}, _rank:Number(r.rank) };
   }).sort((a,b)=>b.score-a.score||a._rank-b._rank).slice(0,limit).map(({_rank,...r})=>r);
 }
 
@@ -156,13 +165,13 @@ export function expand(db: Db, id: string, opts: { project?: string; scope?: "pr
   const doc = db.prepare("SELECT * FROM documents WHERE result_id=?").get(id) as any;
   if (!doc || (opts.source && doc.source !== opts.source) || (opts.scope !== "all" && doc.source !== "wiki" && (!opts.project || doc.project !== opts.project))) return null;
   const session = db.prepare("SELECT parent_session FROM sessions WHERE source=? AND session_id=?").get(doc.source, doc.session_id) as any;
-  const getEntry = (entryId: string) => db.prepare("SELECT entry_id,parent_id,role,kind,timestamp,text,indexable FROM entries WHERE source=? AND session_id=? AND entry_id=?").get(doc.source, doc.session_id, entryId) as any;
+  const getEntry = (entryId: string) => db.prepare("SELECT entry_id,parent_id,role,kind,timestamp,text,indexable,origin FROM entries WHERE source=? AND session_id=? AND entry_id=?").get(doc.source, doc.session_id, entryId) as any;
   const target = getEntry(doc.entry_id);
   if (!target || offset > target.text.length) return null;
   const pageOffset = offset > 0 && offset < target.text.length && /[\uD800-\uDBFF]/.test(target.text[offset - 1]) && /[\uDC00-\uDFFF]/.test(target.text[offset]) ? offset - 1 : offset;
 
   const evidenceKind = doc.source === "wiki" ? "curated wiki page" : "historical evidence";
-  const label = (entry: any) => `[${evidenceKind}; ${doc.source}; ${entry.role}; ${entry.timestamp ?? "undated"}; session ${String(doc.session_id).slice(0, 36)}; entry ${String(entry.entry_id).slice(0, 36)}]\n`;
+  const label = (entry: any) => `[${evidenceKind}; ${doc.source}; origin ${entry.origin}; ${entry.role}; ${entry.timestamp ?? "undated"}; session ${String(doc.session_id).slice(0, 36)}; entry ${String(entry.entry_id).slice(0, 36)}]\n`;
   const metadataRows = db.prepare("SELECT entry_id,parent_id FROM entries WHERE source=? AND session_id=?").all(doc.source, doc.session_id) as any[];
   const children = new Map<string, string[]>();
   const parentById = new Map<string, string | null>();
@@ -226,7 +235,7 @@ export function expand(db: Db, id: string, opts: { project?: string; scope?: "pr
     }
     if (visited >= 100 && !stoppedAtFork && (children.get(current)?.length ?? 0) > 0) traversalTruncated = true;
   } else if ((opts.direction === "forward" || opts.direction === "both") && doc.source === "opencode") {
-    const after = db.prepare(`SELECT entry_id,role,kind,timestamp,text,indexable FROM entries
+    const after = db.prepare(`SELECT entry_id,role,kind,timestamp,text,indexable,origin FROM entries
       WHERE source=? AND session_id=? AND rowid>(SELECT rowid FROM entries WHERE source=? AND session_id=? AND entry_id=?)
       ORDER BY rowid LIMIT 24`).all(doc.source, doc.session_id, doc.source, doc.session_id, doc.entry_id) as any[];
     replies = after.filter(entry => entry.indexable && entry.text.trim());
@@ -260,7 +269,7 @@ export function expand(db: Db, id: string, opts: { project?: string; scope?: "pr
     if (doc.source === "opencode") {
       const targetRow = db.prepare("SELECT rowid FROM entries WHERE source=? AND session_id=? AND entry_id=?").get(doc.source, doc.session_id, doc.entry_id) as any;
       if (targetRow) {
-        ancestors = (db.prepare(`SELECT entry_id,role,kind,timestamp,text,indexable FROM entries
+        ancestors = (db.prepare(`SELECT entry_id,role,kind,timestamp,text,indexable,origin FROM entries
           WHERE source=? AND session_id=? AND rowid<? ORDER BY rowid DESC LIMIT 23`).all(doc.source, doc.session_id, targetRow.rowid) as any[]).filter(entry => entry.indexable && entry.text);
       }
     } else {
@@ -299,10 +308,11 @@ export function expand(db: Db, id: string, opts: { project?: string; scope?: "pr
     }
   }
 
-  const provenance = { source: doc.source, sessionId: doc.session_id, project: doc.project, entryId: doc.entry_id, resultId: id };
+  const provenance = { source: doc.source, sessionId: doc.session_id, project: doc.project, entryId: doc.entry_id, resultId: id, origin: target.origin };
   return {
     id,
     source: doc.source,
+    origin: target.origin,
     sessionId: doc.session_id,
     project: doc.project,
     entryId: doc.entry_id,
