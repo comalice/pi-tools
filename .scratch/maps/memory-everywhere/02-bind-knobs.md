@@ -1,7 +1,7 @@
 # Bind knobs on existing servers
 
 **Type:** task
-**Status:** open
+**Status:** claimed
 **Blocked by:** None
 
 ## Question
