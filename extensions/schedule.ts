@@ -8,8 +8,8 @@
  * - list_scheduled: query active alerts and wakes
  * - cancel_scheduled: remove one by id
  */
+import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-coding-agent";
 import { execFileSync } from "node:child_process";
 import { buildSpec, cancel, listEntries, newId, schedule, type Exec, type ScheduleEntry } from "../src/schedule/core.ts";
 
