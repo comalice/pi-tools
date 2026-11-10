@@ -44,6 +44,11 @@ export function renderMarkdown(
       const text = display || name;
       return href ? `[${text}](${href})` : `<span class="redlink">${text} (unknown entity)</span>`;
     })
+    .replace(/\[\[page:([a-z0-9][a-z0-9-]{0,79})(?:\|([^\]]{1,160}))?\]\]/g, (_all, slug, display) => {
+      const href = resolveLink(slug);
+      const text = display || slug;
+      return href ? `[${text}](${href})` : `<span class="redlink">${text} (missing page)</span>`;
+    })
     .replace(/\[\[([a-z0-9][a-z0-9-]{0,79})\]\]/g, (_all, slug) => {
       const href = resolveLink(slug);
       return href ? `[${slug}](${href})` : `<span class="redlink">[[${slug}]] (missing)</span>`;
@@ -252,7 +257,16 @@ ${dream ? `<p><a href="${escapeHtml(dream)}">dream runner console (active run)</
       if (!existsSync(file)) return notFound();
       try {
         const page = parsePage(readFileSync(file, "utf8"), file);
-        return send(chrome(page.meta.title, token, `<h1>${escapeHtml(page.meta.title)}</h1>${metaTable(page.meta, ctx)}${renderMarkdown(page.body, slug => (pageExists(slug) ? `/${token}/page/${slug}` : null), resolveEntity)}`));
+        const slug = page.meta.slug;
+        // Backlinks: other pages carrying a [[page:slug]] wikilink.
+        const needle = `[[page:${slug}`;
+        const linkedFrom = listMarkdown(pagesDir)
+          .filter(p => p.meta.slug !== slug && readFileSync(p.file, "utf8").includes(needle))
+          .map(p => `<a href="/${token}/page/${escapeHtml(p.meta.slug)}">${escapeHtml(p.meta.title)}</a>`);
+        const backlinkRail = linkedFrom.length
+          ? `<table class="meta"><tr><td>linked from</td><td colspan="3">${linkedFrom.join(", ")}</td></tr></table>`
+          : "";
+        return send(chrome(page.meta.title, token, `<h1>${escapeHtml(page.meta.title)}</h1>${metaTable(page.meta, ctx)}${backlinkRail}${renderMarkdown(page.body, s => (pageExists(s) ? `/${token}/page/${s}` : null), resolveEntity)}`));
       } catch (error) {
         return send(chrome("page error", token, `<p class="redlink">${escapeHtml((error as Error).message)}</p>`));
       }

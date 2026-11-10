@@ -170,13 +170,37 @@ try {
       }
     }
     emit({ ok: true, pagesScanned: files.length, pagesChanged: results.length, linksAdded: totalAdded, changed: results });
+  } else if (command === "link-pages") {
+    const { linkPageMentions } = await import("./pagelinks.ts");
+    const pagesDir = path.join(root, "pages");
+    const files = readdirSync(pagesDir).filter(name => name.endsWith(".md"));
+    const pages = files.map(name => {
+      const parsed = parsePage(readFileSync(path.join(pagesDir, name), "utf8"), name);
+      return { slug: parsed.meta.slug, title: parsed.meta.title };
+    });
+    const results = [];
+    let totalAdded = 0;
+    for (const name of files) {
+      const file = path.join(pagesDir, name);
+      const stat = lstatSync(file);
+      if (stat.isSymbolicLink() || !stat.isFile()) continue;
+      const original = readFileSync(file, "utf8");
+      const own = parsePage(original, name).meta.slug;
+      const { text, added } = linkPageMentions(original, pages, own);
+      if (text !== original) {
+        writeFileSync(file, text, { mode: 0o600 });
+        results.push({ file: name, added });
+        totalAdded += added;
+      }
+    }
+    emit({ ok: true, pagesScanned: files.length, pagesChanged: results.length, linksAdded: totalAdded, changed: results });
   } else if (command === "serve") {
     assertRealDirectory(root, "Wiki root");
     const port = Number(value("--port") ?? process.env.PI_WIKI_PORT ?? 6341);
     if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error("--port must be an integer from 1024 to 65535");
     serveWiki({ wikiDir: root, port });
   } else {
-    throw new Error("Usage: wiki <init|new|stage|list|survey|link-entities|serve> [flags]");
+    throw new Error("Usage: wiki <init|new|stage|list|survey|link-entities|link-pages|serve> [flags]");
   }
 } catch (error) {
   emit({ ok: false, error: error instanceof Error ? error.message : String(error) });

@@ -160,6 +160,23 @@ export async function refreshVectorIndex(index: string, options: { maxAgeMs?: nu
 }
 
 type SearchInput = { query: string; cues?: string[]; limit?: number; project?: string; source?: string; session?: string; currentSession?: string; scope?: "project"|"all"; mode?: "lexical"|"hybrid"|"semantic"|"auto"; cosineFloor?: number };
+
+const PAGE_LINK_RE = /\[\[page:([a-z0-9][a-z0-9-]{0,79})(?:\|[^\]\n]{0,160})?\]\]/g;
+
+/** Surface wiki page links (outgoing + backlinks) on wiki results so agents can traverse the graph. */
+function enrichWikiLinks(db: DatabaseSync, results: any[]): any[] {
+  if (!results.some((r) => r.source === "wiki")) return results;
+  const textStmt = db.prepare("SELECT text FROM documents WHERE result_id=?");
+  const backlinkStmt = db.prepare("SELECT session_id FROM documents WHERE source='wiki' AND session_id<>? AND instr(text, ?) > 0 LIMIT 20");
+  for (const r of results) {
+    if (r.source !== "wiki") continue;
+    const text = String((textStmt.get(r.result_id) as any)?.text ?? "");
+    r.page_links = [...new Set([...text.matchAll(PAGE_LINK_RE)].map((m) => m[1]))];
+    r.linked_from = (backlinkStmt.all(r.session_id, `[[page:${r.session_id}`) as any[]).map((row) => row.session_id);
+  }
+  return results;
+}
+
 export async function searchMemory(db: DatabaseSync, index: string, input: SearchInput, signal?: AbortSignal) {
   const mode = input.mode ?? "auto";
   const limit = input.limit ?? 8;
@@ -174,14 +191,14 @@ export async function searchMemory(db: DatabaseSync, index: string, input: Searc
   if (input.cosineFloor !== undefined && (!Number.isFinite(input.cosineFloor) || input.cosineFloor < -1 || input.cosineFloor > 1)) throw new Error("cosineFloor must be between -1 and 1");
   const lexicalInput = { ...input, limit: 20 };
   const lexical = () => lexicalSearch(db, lexicalInput);
-  if (mode === "lexical") { const started = Date.now(); const results = lexical().slice(0, limit); return { results, retrieval: { mode: "lexical", status: "ok", elapsedMs: Date.now() - started } }; }
+  if (mode === "lexical") { const started = Date.now(); const results = enrichWikiLinks(db, lexical().slice(0, limit)); return { results, retrieval: { mode: "lexical", status: "ok", elapsedMs: Date.now() - started } }; }
   const started = Date.now();
   let config: Config | null;
   try { config = readSemanticConfig(index); }
-  catch (error) { if (mode === "semantic") throw error; return { results: lexical().slice(0, limit), retrieval: { mode: "lexical", status: "fallback", warning: String((error as Error).message), elapsedMs: Date.now() - started } }; }
+  catch (error) { if (mode === "semantic") throw error; return { results: enrichWikiLinks(db, lexical().slice(0, limit)), retrieval: { mode: "lexical", status: "fallback", warning: String((error as Error).message), elapsedMs: Date.now() - started } }; }
   if (!config) {
     if (mode === "semantic") throw new Error("Semantic index is not configured; run vector-build");
-    return { results: lexical().slice(0, limit), retrieval: { mode: "lexical", status: mode === "hybrid" ? "fallback" : "ok", ...(mode === "hybrid" ? { warning: "Semantic index is not configured; run vector-build" } : {}), elapsedMs: Date.now() - started } };
+    return { results: enrichWikiLinks(db, lexical().slice(0, limit)), retrieval: { mode: "lexical", status: mode === "hybrid" ? "fallback" : "ok", ...(mode === "hybrid" ? { warning: "Semantic index is not configured; run vector-build" } : {}), elapsedMs: Date.now() - started } };
   }
   try {
     const canonical = (value: string) => value.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu)?.sort().join(" ") ?? value.trim().toLowerCase();
@@ -272,9 +289,9 @@ export async function searchMemory(db: DatabaseSync, index: string, input: Searc
         provenance: { source: value.row.source, sessionId: value.row.session_id, project: value.row.project, entryId: value.row.entry_id, resultId: value.row.result_id },
       };
     }).sort((a, b) => b.score - a.score).slice(0, limit);
-    return { results, retrieval: { mode: mode === "semantic" ? "semantic" : "hybrid", status: "ok", elapsedMs: Date.now() - started, candidates: vectorMap.size, lexicalCandidates: lexicalRows.length, cosineFloor: floor } };
+    return { results: enrichWikiLinks(db, results), retrieval: { mode: mode === "semantic" ? "semantic" : "hybrid", status: "ok", elapsedMs: Date.now() - started, candidates: vectorMap.size, lexicalCandidates: lexicalRows.length, cosineFloor: floor } };
   } catch (error) {
     if (mode === "semantic") throw error;
-    return { results: lexical().slice(0, limit), retrieval: { mode: "lexical", status: "fallback", warning: `Semantic retrieval unavailable: ${(error as Error).message}`, elapsedMs: Date.now() - started } };
+    return { results: enrichWikiLinks(db, lexical().slice(0, limit)), retrieval: { mode: "lexical", status: "fallback", warning: `Semantic retrieval unavailable: ${(error as Error).message}`, elapsedMs: Date.now() - started } };
   }
 }
