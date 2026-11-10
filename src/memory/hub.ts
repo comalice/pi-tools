@@ -102,6 +102,7 @@ export function createMemoryHubServer(options: MemoryHubOptions = {}): { server:
         const fields = scope(input.scope, input.project);
         const mode = input.mode;
         if (mode !== undefined && !["auto", "lexical", "hybrid", "semantic"].includes(mode)) throw new HttpError(400, "mode must be lexical, hybrid, semantic, or auto");
+        if (input.currentSession !== undefined && (typeof input.currentSession !== "string" || input.currentSession.length < 1 || input.currentSession.length > 200)) throw new HttpError(400, "currentSession must contain 1 to 200 characters");
         if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 10)) throw new HttpError(400, "limit must be an integer from 1 to 10");
         const retrievalScope = fields.scope ?? (fields.project === undefined ? "all" : "project");
         let result;
@@ -114,12 +115,15 @@ export function createMemoryHubServer(options: MemoryHubOptions = {}): { server:
             cosineFloor: input.cosineFloor,
             source: input.source,
             session: input.session,
+            currentSession: input.currentSession,
             project: fields.project,
             scope: retrievalScope,
           });
         } catch (error) { throw new HttpError(400, (error as Error).message); }
-        const latest = reader.prepare("SELECT MAX(timestamp) AS latest FROM documents").get() as any;
-        return send(res, 200, { ok: true, ...result, archive: { latest: latest?.latest ?? null } });
+        const latest = input.currentSession
+          ? reader.prepare("SELECT MAX(timestamp) AS latest FROM documents WHERE session_id<>?").get(input.currentSession)
+          : reader.prepare("SELECT MAX(timestamp) AS latest FROM documents").get();
+        return send(res, 200, { ok: true, ...result, archive: { latest: (latest as any)?.latest ?? null } });
       }
       if (req.method === "POST" && url.pathname === "/expand") {
         const input = await readJson(req);
