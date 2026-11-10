@@ -7,6 +7,7 @@ import { parsePage, serializePage, slugify, today, type PageMeta } from "./forma
 import { writeStaging } from "./staging.ts";
 import { runSurvey } from "./survey.ts";
 import { serveWiki } from "./server.ts";
+import { resolveBindAddress } from "../shared/bind.ts";
 
 const MAX_STAGING_CHARS = 64_000;
 
@@ -198,7 +199,8 @@ try {
     assertRealDirectory(root, "Wiki root");
     const port = Number(value("--port") ?? process.env.PI_WIKI_PORT ?? 6341);
     if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error("--port must be an integer from 1024 to 65535");
-    serveWiki({ wikiDir: root, port });
+    const bind = resolveBindAddress(value("--bind"), process.env.PI_WIKI_BIND);
+    serveWiki({ wikiDir: root, port, bind });
   } else {
     throw new Error("Usage: wiki <init|new|stage|list|survey|link-entities|link-pages|serve> [flags]");
   }

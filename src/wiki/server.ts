@@ -8,12 +8,13 @@ import { marked } from "marked";
 import { parsePage, slugify, type PageMeta } from "./format.ts";
 import { renderCanonical, type LinkContext, type SessionInfo } from "./links.ts";
 import { search } from "../memory/store.ts";
+import { resolveBindAddress } from "../shared/bind.ts";
 
 // Read-only web front-end for the wiki: page index sorted by verification
 // staleness, rendered pages with clickable [[links]] (missing targets shown as
 // red links), staging visibility clearly marked unvetted, and full-text search
-// backed by the memory archive's wiki source. Loopback-only behind a persistent
-// unguessable token so the URL is stable and bookmarkable.
+// backed by the memory archive's wiki source. Bound to loopback by default,
+// behind a persistent unguessable token so the URL is stable and bookmarkable.
 
 export interface WikiServerOptions {
   wikiDir: string;
@@ -456,15 +457,17 @@ ${entries || "<p>No indexed messages in this session.</p>"}`));
   return { server, token };
 }
 
-export function serveWiki(options: WikiServerOptions & { port: number }): void {
+export function serveWiki(options: WikiServerOptions & { port: number; bind?: string }): void {
+  const bind = resolveBindAddress(options.bind);
   const { server, token } = createWikiServer(options);
   const listen = (port: number, attempt = 0) => {
     server.once("error", (error: any) => {
       if (error?.code === "EADDRINUSE" && attempt < 9) listen(port + 1, attempt + 1);
       else throw error;
     });
-    server.listen(port, "127.0.0.1", () => {
-      console.log(`[wiki] front-end: http://127.0.0.1:${port}/${token}/`);
+    server.listen(port, bind, () => {
+      const host = bind.includes(":") ? `[${bind}]` : bind;
+      console.log(`[wiki] front-end: http://${host}:${port}/${token}/`);
     });
   };
   listen(options.port);
