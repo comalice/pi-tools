@@ -1,0 +1,8 @@
+[Unit]
+Description=Push this spoke's Pi sessions to the memory hub
+Documentation=file://@REPO@/docs/memory.md
+
+[Service]
+Type=oneshot
+ExecStart=@NODE@ --experimental-strip-types @REPO@/src/memory/cli.ts push
+Nice=10

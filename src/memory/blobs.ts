@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -114,7 +114,44 @@ function importRoot(db: DatabaseSync, source: ImportSource, blobDirectory: strin
   return { sourceRoot, configured };
 }
 
-export function importPayload(db: DatabaseSync, source: ImportSource, filename: string, bytes: Uint8Array, blobDirectory: string, opts: { origin?: string } = {}) {
+function replacePayloadVersion<T>(sourceRoot: string, origin: string, filename: string, destination: string, copied: boolean, ingest: () => T): T {
+  const originDir = path.join(sourceRoot, originDirectory(origin));
+  const suffix = `--${safeFilename(filename)}`;
+  const previous = existsSync(originDir) ? readdirSync(originDir).filter(name => name.endsWith(suffix)).map(name => path.join(originDir, name)).filter(file => file !== destination) : [];
+  if (!previous.length) {
+    try { return ingest(); } catch (error) {
+      if (copied) try { unlinkSync(destination); } catch { /* already absent */ }
+      throw error;
+    }
+  }
+  for (const file of previous) {
+    const st = lstatSync(file);
+    if (st.isSymbolicLink() || !st.isFile()) throw new Error(`Unexpected blob entry: ${file}`);
+  }
+  const backup = path.join(path.dirname(sourceRoot), `.push-replaced-${randomUUID()}`);
+  mkdirSync(backup, { mode: 0o700 });
+  const moved: string[] = [];
+  try {
+    for (const file of previous) {
+      const saved = path.join(backup, path.basename(file));
+      renameSync(file, saved);
+      moved.push(saved);
+    }
+    const result = ingest();
+    try { rmSync(backup, { recursive: true, force: true }); } catch { /* backup is outside the scanned blob root */ }
+    return result;
+  } catch (error) {
+    if (copied) try { unlinkSync(destination); } catch { /* already absent */ }
+    let restoreFailed = false;
+    for (const saved of moved) {
+      try { renameSync(saved, path.join(originDir, path.basename(saved))); } catch { restoreFailed = true; }
+    }
+    if (!restoreFailed) try { rmSync(backup, { recursive: true, force: true }); } catch { /* retain failed recovery data */ }
+    throw error;
+  }
+}
+
+export function importPayload(db: DatabaseSync, source: ImportSource, filename: string, bytes: Uint8Array, blobDirectory: string, opts: { origin?: string; replaceFilename?: boolean } = {}) {
   validSource(source);
   if (typeof filename !== "string" || !filename.trim() || filename.length > 255) throw new Error("Import filename must contain 1 to 255 characters");
   if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) throw new Error("Import payload must not be empty");
@@ -122,9 +159,14 @@ export function importPayload(db: DatabaseSync, source: ImportSource, filename: 
   const origin = opts.origin ?? originValue();
   if (!origin.trim() || origin.length > 255) throw new Error("origin must contain 1 to 255 characters");
   const stored = putBlob(sourceRoot, origin, Buffer.from(bytes), filename);
-  if (configured) db.prepare("UPDATE source_config SET root=? WHERE source=?").run(sourceRoot, source);
-  else registerSource(db, source, sourceRoot);
-  const ingest = ingestSource(db, source, sourceRoot, { origin });
+  const runIngest = () => {
+    if (configured) db.prepare("UPDATE source_config SET root=? WHERE source=?").run(sourceRoot, source);
+    else registerSource(db, source, sourceRoot);
+    return ingestSource(db, source, sourceRoot, { origin });
+  };
+  const ingest = source === "pi" && opts.replaceFilename
+    ? replacePayloadVersion(sourceRoot, origin, filename, stored.file, stored.copied, runIngest)
+    : runIngest();
   return { source, copied: stored.copied ? 1 : 0, files: [stored.file], ingest };
 }
 

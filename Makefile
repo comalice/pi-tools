@@ -7,9 +7,10 @@ SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
 UNITS := pi-wiki-serve.service pi-memory-hub.service pi-memory-ingest.service pi-memory-ingest.timer \
          pi-memory-vector-refresh.service pi-memory-vector-refresh.timer \
          pi-dream.service pi-dream.timer
+SPOKE_UNITS := pi-memory-push.service pi-memory-push.timer
 
 .PHONY: run ingest maintain dream status test \
-        install-systemd uninstall-systemd systemd-status install-bin
+        install-systemd uninstall-systemd install-spoke uninstall-spoke systemd-status install-bin
 
 # --- Running things directly -------------------------------------------------
 
@@ -67,6 +68,22 @@ install-systemd: $(SYSTEMD_USER_DIR) ## Install and enable user systemd units
 	@echo "---"
 	@echo "Units live in $(SYSTEMD_USER_DIR). To survive logout, run: loginctl enable-linger $$USER"
 	@echo "Start a dream run now with: systemctl --user start pi-dream.service"
+
+install-spoke: $(SYSTEMD_USER_DIR) ## Install and enable the spoke-side Pi session push timer
+	@for unit in $(SPOKE_UNITS); do \
+	  sed -e 's|@REPO@|$(REPO)|g' -e 's|@NODE@|$(NODE)|g' \
+	    deploy/systemd/$$unit.in > $(SYSTEMD_USER_DIR)/$$unit; \
+	  echo "installed $$unit"; \
+	done
+	systemctl --user daemon-reload
+	systemctl --user enable --now pi-memory-push.timer
+	@echo "Spoke push timer enabled. Configure ~/.pi/agent/memory/hub.json with memory join first."
+
+uninstall-spoke: ## Disable and remove the spoke-side push timer
+	-systemctl --user disable --now pi-memory-push.timer 2>/dev/null
+	@for unit in $(SPOKE_UNITS); do rm -f $(SYSTEMD_USER_DIR)/$$unit; done
+	systemctl --user daemon-reload
+	@echo "Spoke push units removed"
 
 uninstall-systemd: ## Disable and remove the user systemd units
 	-systemctl --user disable --now pi-wiki-serve.service pi-memory-hub.service pi-memory-ingest.timer \

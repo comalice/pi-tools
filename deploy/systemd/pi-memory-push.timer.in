@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically push Pi sessions to the memory hub
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
