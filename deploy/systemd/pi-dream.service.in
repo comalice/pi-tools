@@ -4,5 +4,5 @@ Documentation=@REPO@/docs/wiki.md
 
 [Service]
 Type=oneshot
-ExecStart=@NODE@ --experimental-strip-types @REPO@/src/dream/runner.ts --since 30d --model gladiator/nemotron-3-super --parallel 3
+ExecStart=@NODE@ --experimental-strip-types @REPO@/src/dream/runner.ts --since 2020-01-01 --model gladiator/nemotron-3-super --parallel 3
 Nice=15
