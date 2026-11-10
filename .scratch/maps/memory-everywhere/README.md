@@ -33,6 +33,7 @@ Settled in the charting grilling (rounds 1–2, 2026-11-10 session), no ticket f
 - **Spoke ingest is push.** `memory push` timer on each spoke; pi sessions shipped raw, opencode/claude via existing digest adapters.
 - **Wiki over git with real hosting.** Hub hosts the canonical remote; spokes clone/push over SSH (per-spoke keys); dossiers/staging hub-only.
 - **Per-spoke revocable tokens**, listed in hub config.
+- [Git hosting on the hub](07-git-hosting.md): bare repo over SSH, dedicated `git` user + `git-shell`, per-spoke keys; spokes address the hub via a `Host memory-hub` SSH alias written by `memory join` — no IPs in remotes.
 
 ## Not yet specified
 
