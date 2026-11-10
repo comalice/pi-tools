@@ -33,6 +33,8 @@ Settled in the charting grilling (rounds 1–2, 2026-11-10 session), no ticket f
 - **Spoke ingest is push.** `memory push` timer on each spoke; pi sessions shipped raw, opencode/claude via existing digest adapters.
 - **Wiki over git with real hosting.** Hub hosts the canonical remote; spokes clone/push over SSH (per-spoke keys); dossiers/staging hub-only.
 - **Per-spoke revocable tokens**, listed in hub config.
+- [Extension remote mode](04-extension-remote-mode.md): `hub.json` switches `memory_search`/`memory_expand` to the hub API; validated config, no silent local fallback, errors name the hub.
+- [Spoke push adapter + timer](05-spoke-push-adapter.md): `pi-memory push` with sha256 watermarks; hashed relative-path filenames; hub replaces prior snapshot on update; `make install-spoke` for spoke-side units.
 - [pi-memory-hub service](03-memory-hub-service.md): `/status` `/search` `/expand` `/ingest` behind per-spoke Bearer tokens (hub-local `memory hub-token` management only); token identity is the origin assertion; ingest serialized in-process; live on loopback with the full mint→auth→revoke lifecycle verified.
 - [Origin provenance column](01-origin-provenance.md): `entries.origin` (schema v3, hostname default), captured at ingest with explicit-option > env > hostname precedence; grok adapter threaded on rebase; unchanged sessions keep their original origin.
 - [Bind knobs on existing servers](02-bind-knobs.md): `src/shared/bind.ts` IP-literal validation, `--bind`/`PI_WIKI_BIND`/`PI_DREAM_ADMIN_BIND`, deploy via `make PI_WIKI_BIND=`, overlay ordering as documented drop-in (deployment seam exercised).
