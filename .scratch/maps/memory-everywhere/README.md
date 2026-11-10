@@ -33,6 +33,7 @@ Settled in the charting grilling (rounds 1–2, 2026-11-10 session), no ticket f
 - **Spoke ingest is push.** `memory push` timer on each spoke; pi sessions shipped raw, opencode/claude via existing digest adapters.
 - **Wiki over git with real hosting.** Hub hosts the canonical remote; spokes clone/push over SSH (per-spoke keys); dossiers/staging hub-only.
 - **Per-spoke revocable tokens**, listed in hub config.
+- [memory join onboarding](06-memory-join.md): one-command spoke setup — status verify, `hub.json`, managed ssh `Host memory-hub` block, wiki clone decision paths, push timer; key enrollment stays HITL.
 - [Extension remote mode](04-extension-remote-mode.md): `hub.json` switches `memory_search`/`memory_expand` to the hub API; validated config, no silent local fallback, errors name the hub.
 - [Spoke push adapter + timer](05-spoke-push-adapter.md): `pi-memory push` with sha256 watermarks; hashed relative-path filenames; hub replaces prior snapshot on update; `make install-spoke` for spoke-side units.
 - [pi-memory-hub service](03-memory-hub-service.md): `/status` `/search` `/expand` `/ingest` behind per-spoke Bearer tokens (hub-local `memory hub-token` management only); token identity is the origin assertion; ingest serialized in-process; live on loopback with the full mint→auth→revoke lifecycle verified.
