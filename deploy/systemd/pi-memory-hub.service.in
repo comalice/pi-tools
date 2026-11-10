@@ -1,0 +1,14 @@
+[Unit]
+Description=Pi memory hub for remote spokes
+Documentation=@REPO@/docs/memory.md
+
+[Service]
+Environment=PI_HUB_BIND=@PI_HUB_BIND@
+Environment=PI_HUB_PORT=@PI_HUB_PORT@
+Type=simple
+ExecStart=@NODE@ --experimental-strip-types @REPO@/src/memory/hub-cli.ts serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

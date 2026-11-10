@@ -48,10 +48,11 @@ Run these from the repository root:
 
 ```sh
 npm run memory -- ingest
+npm run memory -- import --source pi ~/archive/session.jsonl
 npm run memory -- import --source claude ~/Downloads/claude-export.json
 npm run memory -- import --source grok ~/Downloads/grok-export/
 npm run memory -- import --backfill
-npm run memory -- forget --source claude --session SESSION_ID
+npm run memory -- forget --source pi --session SESSION_ID
 npm run memory -- status
 npm run memory -- sessions --since 7d
 npm run memory -- search --query 'deployment rollback' --cue 'SQLite WAL' --project "$PWD"
@@ -76,13 +77,16 @@ are not fatal.
 
 ### Watch sources and imported exports
 
-`pi`, `opencode`, and `wiki` remain watch sources: their registered live roots
-are reconciled, so removed source data is pruned on a later ingest (the wiki
-repository remains its own canonical store). Claude and Grok exports are
-import sources. `memory import --source claude|grok PATH...` copies the supplied
-files (or recursively walks supplied directories) into the archive-owned blob
-store, registers that store as the source root, and runs the existing adapter.
-Repeated imports deduplicate by SHA-256 content hash.
+`pi`, `opencode`, and `wiki` normally use watch sources: their registered live
+roots are reconciled, so removed source data is pruned on a later ingest (the
+wiki repository remains its own canonical store). Claude and Grok exports are
+import sources. `memory import --source pi|claude|grok PATH...` copies the
+supplied files (or recursively walks supplied directories) into the
+archive-owned blob store, registers that store as the source root, and runs the
+existing adapter. Pi imports support session JSONL and are used by hub pushes;
+once Pi is registered in blob mode, regular ingest follows that blob root
+rather than the local live sessions directory. Repeated imports deduplicate by
+SHA-256 content hash.
 
 Blobs live under `~/.pi/agent/memory/blobs/<source>/<origin>/` (beside the
 default archive). Each file is named
@@ -104,8 +108,8 @@ Then run `memory ingest` and verify it reports unchanged files and zero removed
 sessions. After a successful backfill, the original export directories are no
 longer load-bearing and may be moved or deleted. Future imports add blobs to
 the same source store. For import roots, a missing blob is not treated as a
-prune; use `memory forget --source claude|grok --session ID` (or `--file PATH`)
-to explicitly remove an imported item and its derived archive rows. The forget
+prune; use `memory forget --source pi|claude|grok --session ID` (or
+`--file PATH`) to explicitly remove an imported item and its derived archive rows. The forget
 command only operates on sources registered in blob-store mode.
 
 Wiki pages are indexed as source `wiki`: one document per page, `session_id`
@@ -123,7 +127,7 @@ never writes to source archives. Pi files are parsed independently and read
 read-only; incomplete final JSONL records wait for the next complete newline.
 Changed complete snapshots are replaced transactionally. Malformed or
 unsupported snapshots do not prune valid entries. Deleted files from watch roots (and legacy Claude/Grok roots until backfill)
-are removed on the next successful reconciliation. Once Claude/Grok are in
+are removed on the next successful reconciliation. Once Pi/Claude/Grok are in
 blob-store mode, pruning is explicit via `memory forget`.
 
 OpenCode's `session`, `message`, and `part` projections are read-only, with
@@ -322,3 +326,58 @@ seconds. Matching is case-insensitive with token boundaries that treat `-`
 and `_` as token characters, so `MAXL-CL-4070` does not match inside
 `MAXL-CL-4070-15`; separator variants (`mcp server` / `mcp_server` /
 `mcp-server`) are generated automatically at load time.
+
+## Remote memory hub
+
+`pi-memory-hub` serves the archive to authenticated remote spokes and accepts
+pushed Pi sessions. It uses plain `node:http`, Bearer authentication, and JSON
+responses. The endpoints are:
+
+- `GET /status` — service version, archive schema, per-source session counts,
+  uptime in seconds, and the calling token's spoke identity.
+- `POST /search` — JSON fields `query`, optional `cues`, `limit` (1–10),
+  `mode`, `cosineFloor`, `source`, `session`, `scope`, and optional `project`.
+  Response fields match local memory search (`results`, `retrieval`, and
+  `archive.latest`). When both `scope` and `project` are absent, hub search
+  defaults to `all`; use `scope: "project"` with the archive's project value
+  to restrict results. Semantic/hybrid retrieval uses the hub's configured
+  vector services just like local retrieval.
+- `POST /expand` — JSON fields `id`, optional `source`, `scope`, `project`,
+  `maxChars`, `offset`, `direction`, `branchId`, and `includeReplies`; returns
+  the local expansion result shape.
+- `POST /ingest` — JSON `{ "source": "pi", "filename": "session.jsonl",
+  "content_base64": "..." }`. It stores the payload as a content-addressed
+  blob and ingests it with the authenticated spoke name as its origin. Pushes
+  are serialized in-process. OpenCode push is not supported.
+
+The hub binds to `127.0.0.1:6342` by default. Configure `PI_HUB_BIND` /
+`PI_HUB_PORT` or `--bind` / `--port`; `resolveBindAddress` accepts only literal
+IPv4/IPv6 addresses. Do not expose the plain-HTTP listener directly to an
+untrusted network: use a trusted private network or a TLS-terminating reverse
+proxy, and protect the bearer token as a credential. Search and expansion can
+return archived conversation text to any holder of a valid spoke token.
+
+Tokens are administered only on the hub host with the local memory CLI:
+
+```sh
+npm run memory -- hub-token add laptop
+npm run memory -- hub-token list
+npm run memory -- hub-token revoke laptop
+```
+
+`add` prints the generated token once; `list` prints spoke names and creation
+times only. There is one active token per spoke; revoke before re-adding. The
+private token map is `~/.pi/agent/memory/hub-tokens.json` (or beneath
+`PI_CODING_AGENT_DIR`), mode 0600. Revocation takes effect on the next request.
+Tokens are never managed over HTTP.
+
+Install the user service alongside the other units with `make install-systemd`;
+it is enabled immediately. Override its bind and port at install time, for
+example `make install-systemd PI_HUB_BIND=0.0.0.0 PI_HUB_PORT=6342`. The service
+uses the normal writable archive opener at startup, applying supported schema
+migrations before opening a separate exact-schema read-only connection for
+search/expand. It creates an empty archive if none exists; the first successful
+push registers Pi as an import-backed blob source. Once that happens, regular
+`memory ingest` reconciles the registered blob root rather than the local live
+sessions directory. Imported Pi blobs are retained until explicitly forgotten;
+normal watch-source pruning semantics remain unchanged for live session roots.

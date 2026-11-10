@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expand, listSessions, openStore, status, SCHEMA_VERSION } from "./store.ts";
 import { ingestClaude, ingestGrok, ingestOpenCode, ingestPi, ingestWiki } from "./ingest.ts";
 import { backfillImports, forgetImport, importFiles } from "./blobs.ts";
+import { addHubToken, listHubTokens, revokeHubToken } from "./hub-tokens.ts";
 import { buildVectorIndex, refreshVectorIndex, searchMemory, vectorStatus } from "./semantic.ts";
 import { embedTexts, health, serviceUrls } from "./vector-client.ts";
 import { evaluateCases, readEvaluationCases } from "./evaluation.ts";
@@ -107,18 +108,32 @@ process.once("SIGTERM", () => operation.abort(new Error("Memory operation cancel
 try {
   const { command, out, args } = parseArgs(process.argv.slice(2));
   const paths = defaults(out);
-  if (!command) throw new Error("Usage: memory <ingest|import|forget|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
-  if (command !== "import" && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+  if (!command) throw new Error("Usage: memory <ingest|import|forget|hub-token|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
+  if (command !== "import" && command !== "hub-token" && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
   const blobDirectory = path.join(path.dirname(paths.index), "blobs");
 
-  if (command === "ingest") {
+  if (command === "hub-token") {
+    only(out, []);
+    const [action, spoke, extra] = args;
+    if (action === "add" && spoke && !extra) {
+      const token = addHubToken(spoke);
+      emit({ ok: true, ...token });
+    } else if (action === "list" && args.length === 1) {
+      emit({ ok: true, tokens: listHubTokens() });
+    } else if (action === "revoke" && spoke && !extra) {
+      emit({ ok: true, ...revokeHubToken(spoke) });
+    } else {
+      throw new Error("Usage: memory hub-token <add SPOKE|list|revoke SPOKE>");
+    }
+  } else if (command === "ingest") {
     only(out, ["--index", "--pi-sessions", "--opencode-db", "--wiki-dir", "--claude-exports", "--grok-exports"]);
     safeIndexLocation(paths.index, paths.pi, paths.opencode);
     const db = openStore(paths.index);
     try {
+      const piRoot = (db.prepare("SELECT root FROM source_config WHERE source='pi'").get() as any)?.root ?? paths.pi;
       const claudeRoot = (db.prepare("SELECT root FROM source_config WHERE source='claude'").get() as any)?.root ?? paths.claude;
       const grokRoot = (db.prepare("SELECT root FROM source_config WHERE source='grok'").get() as any)?.root ?? paths.grok;
-      const sources = [ingestPi(db, paths.pi), ingestOpenCode(db, paths.opencode), ingestClaude(db, claudeRoot), ingestGrok(db, grokRoot), ingestWiki(db, paths.wiki)];
+      const sources = [ingestPi(db, piRoot), ingestOpenCode(db, paths.opencode), ingestClaude(db, claudeRoot), ingestGrok(db, grokRoot), ingestWiki(db, paths.wiki)];
       emit({ ok: true, sources, status: status(db) });
     } finally {
       db.close();
@@ -132,7 +147,7 @@ try {
       try { emit({ ok: true, backfill: backfillImports(db, blobDirectory) }); } finally { db.close(); }
     } else {
       const source = value(out, "--source");
-      if (source !== "claude" && source !== "grok") throw new Error("memory import requires --source claude|grok");
+      if (source !== "pi" && source !== "claude" && source !== "grok") throw new Error("memory import requires --source pi|claude|grok");
       if (!args.length) throw new Error("memory import requires one or more file or directory paths");
       const db = openStore(paths.index);
       try { emit({ ok: true, ...importFiles(db, source, args, blobDirectory), status: status(db) }); } finally { db.close(); }
@@ -141,7 +156,7 @@ try {
     only(out, ["--index", "--source", "--session", "--file"]);
     safeIndexLocation(paths.index, paths.pi, paths.opencode);
     const source = value(out, "--source");
-    if (!source) throw new Error("memory forget requires --source claude|grok");
+    if (!source) throw new Error("memory forget requires --source pi|claude|grok");
     if (!value(out, "--session") && !value(out, "--file")) throw new Error("memory forget requires --session ID or --file PATH");
     if (value(out, "--session") && value(out, "--file")) throw new Error("Specify exactly one of --session or --file");
     if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}`);

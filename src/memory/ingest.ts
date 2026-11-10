@@ -9,7 +9,7 @@ const MAX_PI_FILE = 256 * 1024 * 1024;
 const MAX_LINE = 4 * 1024 * 1024;
 const MAX_OPENCODE_SESSIONS = 100_000;
 const hash = (s: Uint8Array) => createHash("sha256").update(s).digest("hex");
-function importBlobRoot(root: string, source: "claude" | "grok") {
+function importBlobRoot(root: string, source: "pi" | "claude" | "grok") {
   const normalized = path.resolve(root);
   return path.basename(normalized) === source && path.basename(path.dirname(normalized)) === "blobs";
 }
@@ -68,7 +68,14 @@ export function ingestPi(db:DatabaseSync,root:string,opts:{origin?:string}={}){
   }
   const stale=(db.prepare("SELECT file,session_id FROM source_files WHERE source=?").all(source) as any[]).filter(r=>!found.has(r.file));
   let removed=0;
-  if(stale.length)transaction(db,()=>{for(const row of stale){db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source,row.file);const still=db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source,row.session_id);if(!still){db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source,row.session_id);db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source,row.session_id);db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source,row.session_id);removed++;}}});
+  if(stale.length)transaction(db,()=>{for(const row of stale){
+    if(importBlobRoot(root, source)){
+      const live=(db.prepare("SELECT file FROM source_files WHERE source=? AND session_id=?").all(source,row.session_id) as any[]).some(item=>found.has(item.file));
+      if(live)db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source,row.file);
+      continue;
+    }
+    db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source,row.file);const still=db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source,row.session_id);if(!still){db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source,row.session_id);db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source,row.session_id);db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source,row.session_id);removed++;}
+  }});
   return {source,indexed,unchanged,removed};
 }
 const MAX_WIKI_PAGE = 512 * 1024;

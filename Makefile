@@ -1,8 +1,10 @@
 REPO := $(abspath .)
 NODE := $(shell command -v node)
 PI_WIKI_BIND ?= 127.0.0.1
+PI_HUB_BIND ?= 127.0.0.1
+PI_HUB_PORT ?= 6342
 SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
-UNITS := pi-wiki-serve.service pi-memory-ingest.service pi-memory-ingest.timer \
+UNITS := pi-wiki-serve.service pi-memory-hub.service pi-memory-ingest.service pi-memory-ingest.timer \
          pi-memory-vector-refresh.service pi-memory-vector-refresh.timer \
          pi-dream.service pi-dream.timer
 
@@ -44,11 +46,13 @@ install-systemd: $(SYSTEMD_USER_DIR) ## Install and enable user systemd units
 	@for unit in $(UNITS); do \
 	  sed -e 's|@REPO@|$(REPO)|g' -e 's|@NODE@|$(NODE)|g' \
 	    -e 's|@PI_WIKI_BIND@|$(PI_WIKI_BIND)|g' \
+	    -e 's|@PI_HUB_BIND@|$(PI_HUB_BIND)|g' -e 's|@PI_HUB_PORT@|$(PI_HUB_PORT)|g' \
 	    deploy/systemd/$$unit.in > $(SYSTEMD_USER_DIR)/$$unit; \
 	  echo "installed $$unit"; \
 	done
 	systemctl --user daemon-reload
 	systemctl --user enable --now pi-wiki-serve.service
+	systemctl --user enable --now pi-memory-hub.service
 	systemctl --user enable --now pi-memory-ingest.timer
 	systemctl --user enable --now pi-memory-vector-refresh.timer
 	systemctl --user enable pi-dream.timer
@@ -57,12 +61,12 @@ install-systemd: $(SYSTEMD_USER_DIR) ## Install and enable user systemd units
 	@echo "Start a dream run now with: systemctl --user start pi-dream.service"
 
 uninstall-systemd: ## Disable and remove the user systemd units
-	-systemctl --user disable --now pi-wiki-serve.service pi-memory-ingest.timer \
+	-systemctl --user disable --now pi-wiki-serve.service pi-memory-hub.service pi-memory-ingest.timer \
 	  pi-memory-vector-refresh.timer pi-dream.timer 2>/dev/null
 	@for unit in $(UNITS); do rm -f $(SYSTEMD_USER_DIR)/$$unit; done
 	systemctl --user daemon-reload
 	@echo "units removed"
 
 systemd-status: ## Show unit and timer status
-	@systemctl --user status pi-wiki-serve.service --no-pager -l | head -12 || true
+	@systemctl --user status pi-wiki-serve.service pi-memory-hub.service --no-pager -l | head -20 || true
 	@systemctl --user list-timers --no-pager | grep -E "pi-|NEXT" || true

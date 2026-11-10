@@ -3,15 +3,15 @@ import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readF
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { ingestClaude, ingestGrok } from "./ingest.ts";
+import { ingestClaude, ingestGrok, ingestPi } from "./ingest.ts";
 import { registerSource, transaction } from "./store.ts";
 
-export type ImportSource = "claude" | "grok";
-const IMPORT_SOURCES: readonly ImportSource[] = ["claude", "grok"];
+export type ImportSource = "pi" | "claude" | "grok";
+const IMPORT_SOURCES: readonly ImportSource[] = ["pi", "claude", "grok"];
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 function validSource(source: string): asserts source is ImportSource {
-  if (!(IMPORT_SOURCES as readonly string[]).includes(source)) throw new Error("Import source must be claude or grok");
+  if (!(IMPORT_SOURCES as readonly string[]).includes(source)) throw new Error("Import source must be pi, claude, or grok");
 }
 
 function originValue() {
@@ -101,18 +101,38 @@ function putBlob(sourceRoot: string, origin: string, bytes: Buffer, originalName
   return { file: destination, copied: true, digest };
 }
 
-function ingestSource(db: DatabaseSync, source: ImportSource, root: string) {
-  return source === "claude" ? ingestClaude(db, root) : ingestGrok(db, root);
+function ingestSource(db: DatabaseSync, source: ImportSource, root: string, opts: { origin?: string } = {}) {
+  if (source === "pi") return ingestPi(db, root, opts);
+  if (source === "claude") return ingestClaude(db, root, opts);
+  return ingestGrok(db, root, opts);
 }
 
-export function importFiles(db: DatabaseSync, source: ImportSource, inputs: string[], blobDirectory: string) {
-  validSource(source);
-  if (!inputs.length) throw new Error("memory import requires at least one file or directory");
-  const blobs = path.resolve(blobDirectory);
-  const sourceRoot = path.join(blobs, source);
+function importRoot(db: DatabaseSync, source: ImportSource, blobDirectory: string) {
+  const sourceRoot = path.join(path.resolve(blobDirectory), source);
   const configured = db.prepare("SELECT root FROM source_config WHERE source=?").get(source) as any;
   if (configured && path.resolve(configured.root) !== sourceRoot) throw new Error(`Source ${source} is registered at ${configured.root}; run memory import --backfill before adding blobs`);
-  const origin = originValue();
+  return { sourceRoot, configured };
+}
+
+export function importPayload(db: DatabaseSync, source: ImportSource, filename: string, bytes: Uint8Array, blobDirectory: string, opts: { origin?: string } = {}) {
+  validSource(source);
+  if (typeof filename !== "string" || !filename.trim() || filename.length > 255) throw new Error("Import filename must contain 1 to 255 characters");
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) throw new Error("Import payload must not be empty");
+  const { sourceRoot, configured } = importRoot(db, source, blobDirectory);
+  const origin = opts.origin ?? originValue();
+  if (!origin.trim() || origin.length > 255) throw new Error("origin must contain 1 to 255 characters");
+  const stored = putBlob(sourceRoot, origin, Buffer.from(bytes), filename);
+  if (configured) db.prepare("UPDATE source_config SET root=? WHERE source=?").run(sourceRoot, source);
+  else registerSource(db, source, sourceRoot);
+  const ingest = ingestSource(db, source, sourceRoot, { origin });
+  return { source, copied: stored.copied ? 1 : 0, files: [stored.file], ingest };
+}
+
+export function importFiles(db: DatabaseSync, source: ImportSource, inputs: string[], blobDirectory: string, opts: { origin?: string } = {}) {
+  validSource(source);
+  if (!inputs.length) throw new Error("memory import requires at least one file or directory");
+  const { sourceRoot, configured } = importRoot(db, source, blobDirectory);
+  const origin = opts.origin ?? originValue();
   const files = walkPayloads(inputs);
   if (!files.length) throw new Error("Import input contains no regular files");
   const stored: string[] = [];
@@ -124,7 +144,7 @@ export function importFiles(db: DatabaseSync, source: ImportSource, inputs: stri
   }
   if (configured) db.prepare("UPDATE source_config SET root=? WHERE source=?").run(sourceRoot, source);
   else registerSource(db, source, sourceRoot);
-  const ingest = ingestSource(db, source, sourceRoot);
+  const ingest = ingestSource(db, source, sourceRoot, { origin });
   return { source, copied, files: stored, ingest };
 }
 
