@@ -35,7 +35,7 @@ Settled in the charting grilling (rounds 1–2, 2026-11-10 session), no ticket f
 - **Per-spoke revocable tokens**, listed in hub config.
 - [Origin provenance column](01-origin-provenance.md): `entries.origin` (schema v3, hostname default), captured at ingest with explicit-option > env > hostname precedence; grok adapter threaded on rebase; unchanged sessions keep their original origin.
 - [Bind knobs on existing servers](02-bind-knobs.md): `src/shared/bind.ts` IP-literal validation, `--bind`/`PI_WIKI_BIND`/`PI_DREAM_ADMIN_BIND`, deploy via `make PI_WIKI_BIND=`, overlay ordering as documented drop-in (deployment seam exercised).
-- **The hub owns its raw sources.** Imported payloads live in a content-addressed blob store; reconciliation is authoritative over blobs only, never over external file trees; pruning is explicit, never implicit on file disappearance. (Surfaced by an external agent's finding that deleting `~/.pi/agent/grok-exports/` would cascade-prune 322 sessions.)
+- [Blob store + import surfaces](09-blob-store.md) (phase A landed): content-addressed blobs under `memory/blobs/<source>/<origin>/`; claude/grok are import-mode (watch-mode pi/opencode/wiki unchanged); backfill executed 2026-11-10 — roots flipped, zero sessions lost; import roots never cascade-prune; `memory forget` is the only deletion path. Phase B (hub `/import`, admin upload, extension tool) rides with ticket 03.
 - [Git hosting on the hub](07-git-hosting.md): bare repo over SSH, dedicated `git` user + `git-shell`, per-spoke keys; spokes address the hub via a `Host memory-hub` SSH alias written by `memory join` — no IPs in remotes.
 
 ## Not yet specified
