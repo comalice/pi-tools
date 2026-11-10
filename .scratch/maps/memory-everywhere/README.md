@@ -48,6 +48,7 @@ Settled in the charting grilling (rounds 1–2, 2026-11-10 session), no ticket f
 - **Session roaming** — `pi --resume` any session from any box. Has its own locking questions; separate map if ever.
 - **Managed-service topology** — TLS termination, public ingress, what "tenancy" would even mean for one user's agents on rented compute. The deployment seam keeps this possible; nothing here designs it.
 - **Offline queueing guarantees** — v1 push is best-effort on timer cadence; durable spool with backoff is unspecified.
+- **Multi-address bind** — the bind knob takes one address; moving the wiki front-end to the overlay broke loopback/SSH-forward access (outage 2026-11-10). Services should accept a bind list (loopback + overlay) so human and spoke paths coexist.
 - **Claude Code as a first-class spoke source** — export path exists and rides the push adapter, but no spoke-side claude tooling is specified.
 
 ## Out of scope
