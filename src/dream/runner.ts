@@ -7,10 +7,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { listSessions } from "../memory/store.ts";
+import { resolveBindAddress } from "../shared/bind.ts";
 
 // Dream runner: enumerates archived conversation sessions in a window and runs
 // one isolated dream worker per session with bounded concurrency, persisting
-// progress so a run can resume after interruption. Serves a loopback-only
+// progress so a run can resume after interruption. Serves a loopback-by-default
 // admin console under a per-startup random URL; the URL is printed on stdout
 // so it lands in the launching conversation's log.
 
@@ -29,7 +30,7 @@ const ENTRY_ID_FORMAT: Record<string, string> = {
 function parseArgs(argv: string[]) {
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i += 2) {
-    if (!argv[i]?.startsWith("--") || argv[i + 1] === undefined) throw new Error("Usage: dream [--since 30d] [--model gladiator/nemotron-3-super] [--parallel 3] [--max 500] [--port 6339] [--state-dir DIR] [--index FILE]");
+    if (!argv[i]?.startsWith("--") || argv[i + 1] === undefined) throw new Error("Usage: dream [--since 30d] [--model gladiator/nemotron-3-super] [--parallel 3] [--max 500] [--port 6339] [--bind ADDR] [--state-dir DIR] [--index FILE]");
     out[argv[i]] = argv[i + 1];
   }
   const agent = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
@@ -39,6 +40,7 @@ function parseArgs(argv: string[]) {
     parallel: Math.min(8, Math.max(1, Number(out["--parallel"] ?? 3) || 3)),
     max: Math.min(5000, Math.max(1, Number(out["--max"] ?? 500) || 500)),
     port: Math.min(65535, Math.max(1024, Number(out["--port"] ?? process.env.PI_DREAM_ADMIN_PORT ?? 6339) || 6339)),
+    bind: resolveBindAddress(out["--bind"], process.env.PI_DREAM_ADMIN_BIND),
     stateDir: out["--state-dir"] ?? path.join(agent, "dream"),
     index: out["--index"] ?? process.env.PI_MEMORY_INDEX ?? path.join(agent, "memory", "archive.sqlite"),
   };
@@ -210,7 +212,7 @@ function page(): string {
 <table><tr><th>status</th><th>source</th><th>session</th><th>project</th><th>started</th><th>finished</th><th>error</th></tr>${rows}</table>`;
 }
 
-function startServer(port: number, attempt = 0) {
+function startServer(port: number, bind: string, attempt = 0) {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname === `/admin/${state.token}/`) {
@@ -225,11 +227,12 @@ function startServer(port: number, attempt = 0) {
     }
   });
   server.on("error", (error: any) => {
-    if (error?.code === "EADDRINUSE" && attempt < 9) startServer(port + 1, attempt + 1);
+    if (error?.code === "EADDRINUSE" && attempt < 9) startServer(port + 1, bind, attempt + 1);
     else throw error;
   });
-  server.listen(port, "127.0.0.1", () => {
-    console.log(`[dream] admin console: http://127.0.0.1:${port}/admin/${state.token}/`);
+  server.listen(port, bind, () => {
+    const host = bind.includes(":") ? `[${bind}]` : bind;
+    console.log(`[dream] admin console: http://${host}:${port}/admin/${state.token}/`);
   });
 }
 
@@ -238,5 +241,5 @@ enumerate();
 save();
 const counts = countByStatus();
 console.log(`[dream] window ${config.since}: ${JSON.stringify(counts)} · model ${config.model} · parallel ${config.parallel}`);
-startServer(config.port);
+startServer(config.port, config.bind);
 pump();

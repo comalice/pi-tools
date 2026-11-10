@@ -65,18 +65,45 @@ npm run wiki -- new --title "Page title" [--tags a,b]
 npm run wiki -- stage --title T --session ID [--entry E]... < body.md
 npm run wiki -- list [--staging]
 npm run wiki -- survey                    # librarian pre-pass: verify citations, cluster, suggest dispositions
-npm run wiki -- serve [--port 6341]       # read-only web front-end (loopback)
+npm run wiki -- serve [--port 6341] [--bind ADDR]  # read-only web front-end (loopback by default)
 ```
 
-`serve` starts a read-only front-end bound to loopback: page index sorted by
-verification staleness, rendered pages with clickable `[[links]]` (missing
-targets shown as red links), clearly-marked unvetted staging visibility, and a
-search bar backed by the memory archive's `wiki` source. The URL carries a
-**persistent** unguessable token stored in `<wiki>/.admin-token` (mode 0600,
-gitignored), so the bookmark is stable across restarts — unlike the dream
-runner's console, whose token rotates per startup; when a dream run is active
-the wiki index links to its console automatically. Editing stays in files +
-git; the web UI never writes.
+`serve` starts a read-only front-end bound to `127.0.0.1` by default. Set
+`PI_WIKI_BIND` or pass `--bind <addr>` to select an IPv4 or IPv6 address; the
+flag takes precedence over the environment variable. For example, to bind a
+Nebula interface at `100.64.12.34`, run `npm run wiki -- serve --bind
+100.64.12.34` (or set `PI_WIKI_BIND=100.64.12.34`). The application treats
+this as an ordinary address and has no overlay-network dependency.
+
+The loopback default is a security boundary: the wiki and dream consoles have
+no transport encryption, and their unguessable URL tokens are bearer secrets.
+Binding a non-loopback address makes the console reachable from that network;
+use only a trusted interface/network and protect the token URLs. The wiki URL
+carries a **persistent** unguessable token stored in `<wiki>/.admin-token`
+(mode 0600, gitignored), so the bookmark is stable across restarts — unlike the
+dream runner's console, whose token rotates per startup; when a dream run is
+active the wiki index links to its console automatically. Editing stays in
+files + git; the web UI never writes. The dream admin console also defaults to
+loopback and accepts `--bind <addr>` or `PI_DREAM_ADMIN_BIND`; for example,
+`npm run dream -- --bind 100.64.12.34` binds it to that overlay address. The
+same trusted-network warning applies.
+
+The systemd template defaults to loopback. To deploy the wiki on an overlay
+address, substitute the address when installing the unit:
+
+```sh
+make install-systemd PI_WIKI_BIND=100.64.12.34
+```
+
+If the interface is brought up by a service that needs ordering, add that
+machine-specific dependency as a user-unit drop-in rather than coupling the
+repository unit to one overlay client:
+
+```ini
+# ~/.config/systemd/user/pi-wiki-serve.service.d/overlay.conf
+[Unit]
+After=dnclient.service
+```
 
 `stage` reads the body from stdin and fingerprints by session + entries, so a
 retried dream worker overwrites its own staging file instead of duplicating.

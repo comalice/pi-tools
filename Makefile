@@ -1,5 +1,6 @@
 REPO := $(abspath .)
 NODE := $(shell command -v node)
+PI_WIKI_BIND ?= 127.0.0.1
 SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
 UNITS := pi-wiki-serve.service pi-memory-ingest.service pi-memory-ingest.timer \
          pi-memory-vector-refresh.service pi-memory-vector-refresh.timer \
@@ -42,6 +43,7 @@ $(SYSTEMD_USER_DIR):
 install-systemd: $(SYSTEMD_USER_DIR) ## Install and enable user systemd units
 	@for unit in $(UNITS); do \
 	  sed -e 's|@REPO@|$(REPO)|g' -e 's|@NODE@|$(NODE)|g' \
+	    -e 's|@PI_WIKI_BIND@|$(PI_WIKI_BIND)|g' \
 	    deploy/systemd/$$unit.in > $(SYSTEMD_USER_DIR)/$$unit; \
 	  echo "installed $$unit"; \
 	done

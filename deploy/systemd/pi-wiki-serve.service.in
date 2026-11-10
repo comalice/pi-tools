@@ -3,6 +3,7 @@ Description=Pi wiki read-only web front-end
 Documentation=@REPO@/docs/wiki.md
 
 [Service]
+Environment=PI_WIKI_BIND=@PI_WIKI_BIND@
 Type=simple
 ExecStart=@NODE@ --experimental-strip-types @REPO@/src/wiki/cli.ts serve
 Restart=on-failure
