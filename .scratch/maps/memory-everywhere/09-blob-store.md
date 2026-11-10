@@ -1,7 +1,7 @@
 # Blob store + import surfaces
 
 **Type:** task
-**Status:** open
+**Status:** claimed
 **Blocked by:** Origin provenance column
 
 ## Question
