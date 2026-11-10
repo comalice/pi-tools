@@ -296,13 +296,34 @@ incremental event-sequence sync.
 
 ## Extension behavior and limitations
 
-The extension registers `memory_search` and `memory_expand`. Each starts a
-bounded Node CLI worker lazily per call (30-second process timeout, 128 KiB
-output cap), with an absolute script path and no shell interpolation. The
-worker makes no model calls. The extension does not change system prompts or
-transcript context automatically. If the archive is missing, tools direct you
-to run ingestion. Archive paths come from trusted environment/configuration,
-not model-supplied paths.
+The extension registers `memory_search` and `memory_expand`. In local mode,
+each starts a bounded Node CLI worker lazily per call (30-second process
+timeout, 128 KiB output cap), with an absolute script path and no shell
+interpolation. The worker makes no model calls. The extension does not change
+system prompts or transcript context automatically. If the archive is missing,
+tools direct you to run ingestion. Archive paths come from trusted
+environment/configuration, not model-supplied paths.
+
+### Remote extension mode
+
+If `$PI_CODING_AGENT_DIR/memory/hub.json` exists (normally
+`~/.pi/agent/memory/hub.json`), `memory_search` and `memory_expand` send their
+requests to that hub's `/search` and `/expand` endpoints using the configured
+Bearer token. The file must be a regular private file (mode 0600 or stricter)
+containing `{"hub":"http://host:port","token":"<spoke-token>"}`; the hub
+must be an HTTP(S) origin without a path, query, fragment, or embedded
+credentials. `memory join` creates this file. The extension validates the
+configuration on each tool call, uses a 30-second request/response timeout,
+and does not open or ingest a local archive while the pointer exists.
+
+Remote requests preserve the local tools' parameters, project/current-session
+scope, result details, and successful output shape. Search additionally ends
+with `hub archive latest: <timestamp>` (or `unknown`) because the hub reports
+its archive timestamp. Network failures, HTTP errors (including revoked or
+invalid tokens), and invalid configuration are returned as tool errors naming
+the hub or configuration path. There is deliberately no fallback to a local
+archive when a hub pointer is present. If `hub.json` is absent, the extension
+uses local mode unchanged.
 
 Other bounds: search returns at most 20 messages, cues at most 8, query at most
 1000 characters, and normalized messages at most 100,000 characters. Pi files
@@ -337,9 +358,11 @@ responses. The endpoints are:
   uptime in seconds, and the calling token's spoke identity.
 - `POST /search` — JSON fields `query`, optional `cues`, `limit` (1–10),
   `mode`, `cosineFloor`, `source`, `session`, `scope`, and optional `project`.
-  Response fields match local memory search (`results`, `retrieval`, and
-  `archive.latest`). When both `scope` and `project` are absent, hub search
-  defaults to `all`; use `scope: "project"` with the archive's project value
+  Optional `currentSession` excludes the active spoke session and its timestamp
+  from `archive.latest`, matching local extension search. Response fields match
+  local memory search (`results`, `retrieval`, and `archive.latest`). When both
+  `scope` and `project` are absent, hub search defaults to `all`; use
+  `scope: "project"` with the archive's project value
   to restrict results. Semantic/hybrid retrieval uses the hub's configured
   vector services just like local retrieval.
 - `POST /expand` — JSON fields `id`, optional `source`, `scope`, `project`,
