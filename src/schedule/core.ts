@@ -33,6 +33,7 @@ export interface ScheduleEntry {
   prompt?: string;
   model?: string;
   timeoutMinutes?: number;
+  cwd?: string;
 }
 
 export interface Exec {
@@ -156,10 +157,12 @@ export const WAKE_SCRIPT = `#!/bin/bash
 set -u
 DIR="$1"; ID="$2"; UNIT="$3"
 SIDE="$DIR/$ID.json"
-read -r SESSION PROMPT MODEL TIMEOUT < <(python3 -c "
+read -r SESSION PROMPT MODEL TIMEOUT CWD < <(python3 -c "
 import json, base64
 d = json.load(open('$SIDE'))
-print(d['session'], base64.b64encode(d['prompt'].encode()).decode(), d.get('model') or '', d.get('timeoutMinutes') or 30)")
+print(d['session'], base64.b64encode(d['prompt'].encode()).decode(), d.get('model') or '', d.get('timeoutMinutes') or 30, base64.b64encode((d.get('cwd') or '').encode()).decode())"
+CWD=$(echo "$CWD" | base64 -d)
+if [ -n "$CWD" ] && [ -d "$CWD" ]; then cd "$CWD"; fi)
 PROMPT=$(echo "$PROMPT" | base64 -d)
 LOCK="$DIR/wake-$SESSION.lock"
 exec 9>"$LOCK"

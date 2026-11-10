@@ -79,6 +79,7 @@ export default function (pi: ExtensionAPI) {
         prompt: params.prompt,
         model: params.model,
         timeoutMinutes: params.timeoutMinutes,
+        cwd: ctx.sessionManager.getCwd(),
       };
       const result = schedule(entry, exec);
       return {
