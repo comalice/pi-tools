@@ -12,13 +12,13 @@ const SearchParams = Type.Object({
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
   mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("lexical"), Type.Literal("hybrid"), Type.Literal("semantic")], { description: "Force lexical comparison, hybrid fusion, or semantic-only retrieval. Hybrid falls back to lexical with an explicit warning if local services fail." })),
   cosineFloor: Type.Optional(Type.Number({ minimum: -1, maximum: 1, description: "Visible minimum cosine similarity for vector candidates; default 0.75 is a conservative, not yet broadly calibrated filter." })),
-  source: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("opencode"), Type.Literal("claude"), Type.Literal("wiki")], { description: "Restrict to one imported source adapter; wiki is the curated cross-project knowledge base." })),
+  source: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("opencode"), Type.Literal("claude"), Type.Literal("grok"), Type.Literal("wiki")], { description: "Restrict to one imported source adapter; wiki is the curated cross-project knowledge base." })),
   session: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Restrict to a known archived session ID." })),
   scope: Type.Optional(Type.Union([Type.Literal("project"), Type.Literal("all")], { description: "Use all explicitly to search across projects." })),
 });
 const ExpandParams = Type.Object({
   id: Type.String({ minLength: 1, maxLength: 64, description: "Opaque result ID returned by memory_search." }),
-  source: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("opencode"), Type.Literal("claude"), Type.Literal("wiki")])),
+  source: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("opencode"), Type.Literal("claude"), Type.Literal("grok"), Type.Literal("wiki")])),
   scope: Type.Optional(Type.Union([Type.Literal("project"), Type.Literal("all")], { description: "Use all only for a result found with all-project search." })),
   maxChars: Type.Optional(Type.Integer({ minimum: 200, maximum: 8000, description: "Maximum total expansion text, including provenance labels." })),
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 100_000_000, description: "Character offset into the selected message; use nextOffset to continue a long message." })),
@@ -41,6 +41,15 @@ const VECTOR_REFRESH_TIMEOUT_MS = 45 * 60 * 1000;
 const VECTOR_FAILURE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 let ingestInFlight: Promise<void> | null = null;
 let vectorFailureCooldownUntil = 0;
+// Refreshed on every session_start. Background work outlives any single session, so
+// notifications must never touch a captured ctx directly: session replacement
+// (newSession/fork/switchSession/reload) invalidates it and a stale ctx.ui access
+// throws an uncaughtException that kills the process.
+let notifyCtx: ExtensionContext | null = null;
+
+function notify(message: string, level: "info" | "warning") {
+  try { notifyCtx?.ui.notify(message, level); } catch { /* ctx went stale during session replacement */ }
+}
 
 function lastIngestMs(index: string): number {
   let latest = 0;
@@ -50,31 +59,31 @@ function lastIngestMs(index: string): number {
   return latest;
 }
 
-async function maybeRefreshVectors(ctx: ExtensionContext) {
+async function maybeRefreshVectors() {
   if (Date.now() < vectorFailureCooldownUntil) return;
   try {
     const result = await call("vector-refresh", {}, undefined, VECTOR_REFRESH_TIMEOUT_MS);
     const refresh = result.refresh as any;
-    if (refresh?.refreshed) ctx.ui.notify(`Memory vector index rebuilt in the background (${refresh.build.documentCount} documents, ${refresh.build.chunkCount} chunks).`, "info");
+    if (refresh?.refreshed) notify(`Memory vector index rebuilt in the background (${refresh.build.documentCount} documents, ${refresh.build.chunkCount} chunks).`, "info");
   } catch (error) {
     vectorFailureCooldownUntil = Date.now() + VECTOR_FAILURE_COOLDOWN_MS;
-    ctx.ui.notify(`Background memory vector refresh failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    notify(`Background memory vector refresh failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
   }
 }
 
-function maybeIngest(ctx: ExtensionContext) {
+function maybeIngest() {
   if (ingestInFlight) return;
   const last = lastIngestMs(indexPath());
   if (last && Date.now() - last < INGEST_INTERVAL_MS) return;
   ingestInFlight = Promise.resolve(call("ingest", {}, undefined, INGEST_TIMEOUT_MS))
-    .then(() => maybeRefreshVectors(ctx))
-    .catch((error) => ctx.ui.notify(`Background memory ingest failed: ${error instanceof Error ? error.message : String(error)}`, "warning"))
+    .then(() => maybeRefreshVectors())
+    .catch((error) => notify(`Background memory ingest failed: ${error instanceof Error ? error.message : String(error)}`, "warning"))
     .finally(() => { ingestInFlight = null; });
 }
 
 export default function (pi: ExtensionAPI) {
-  pi.on("session_start", (_event, ctx) => { maybeIngest(ctx); });
-  pi.on("agent_end", (_event, ctx) => { maybeIngest(ctx); });
+  pi.on("session_start", (_event, ctx) => { notifyCtx = ctx; maybeIngest(); });
+  pi.on("agent_end", () => { maybeIngest(); });
   pi.registerTool({
     name: "memory_search",
     label: "Search Durable Memory",

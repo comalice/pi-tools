@@ -184,7 +184,7 @@ export async function searchMemory(db: DatabaseSync, index: string, input: Searc
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("limit must be an integer from 1 to 20");
   if (typeof input.query !== "string" || input.query.length > 1000) throw new Error("query must be a string of at most 1000 characters");
   if (input.cues !== undefined && (!Array.isArray(input.cues) || input.cues.length > 8 || input.cues.some(cue => typeof cue !== "string" || cue.length > 120))) throw new Error("cues must contain at most 8 strings of at most 120 characters");
-  if (input.source !== undefined && (typeof input.source !== "string" || !["pi", "opencode", "claude", "wiki"].includes(input.source))) throw new Error("source must be pi, opencode, claude, or wiki");
+  if (input.source !== undefined && (typeof input.source !== "string" || !["pi", "opencode", "claude", "grok", "wiki"].includes(input.source))) throw new Error("source must be pi, opencode, claude, grok, or wiki");
   if (input.session !== undefined && (typeof input.session !== "string" || input.session.length < 1 || input.session.length > 200) || input.currentSession !== undefined && (typeof input.currentSession !== "string" || input.currentSession.length < 1 || input.currentSession.length > 200)) throw new Error("session IDs must contain 1 to 200 characters");
   if (input.project !== undefined && (typeof input.project !== "string" || input.project.length > 4096)) throw new Error("project must be a string of at most 4096 characters");
   if (input.scope !== undefined && !["project", "all"].includes(input.scope)) throw new Error("scope must be project or all");
@@ -228,7 +228,7 @@ export async function searchMemory(db: DatabaseSync, index: string, input: Searc
       let uniqueRank = 0;
       for (const point of points) {
         const p = point?.payload;
-        if (!p || typeof p.result_id !== "string" || p.result_id.length > 64 || !["pi", "opencode", "claude", "wiki"].includes(p.source) || typeof p.session !== "string" || p.session.length > 200 || typeof p.project !== "string" || p.project.length > 4096 || typeof p.content_hash !== "string" || !Number.isFinite(point.score) || point.score < -1 || point.score > 1) continue;
+        if (!p || typeof p.result_id !== "string" || p.result_id.length > 64 || !["pi", "opencode", "claude", "grok", "wiki"].includes(p.source) || typeof p.session !== "string" || p.session.length > 200 || typeof p.project !== "string" || p.project.length > 4096 || typeof p.content_hash !== "string" || !Number.isFinite(point.score) || point.score < -1 || point.score > 1) continue;
         const key = p.result_id;
         if (seenParents.has(key)) continue;
         seenParents.add(key);

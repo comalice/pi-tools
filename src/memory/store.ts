@@ -36,7 +36,7 @@ export function openStore(path: string): Db {
     return db;
   } catch (error) { db.close(); throw error; }
 }
-export const SOURCES = ["pi", "opencode", "claude", "wiki"] as const;
+export const SOURCES = ["pi", "opencode", "claude", "grok", "wiki"] as const;
 export function stableId(...parts: string[]): string { return createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 32); }
 export function transaction<T>(db: Db, fn: () => T): T {
   db.exec("BEGIN IMMEDIATE");
@@ -197,7 +197,7 @@ export function expand(db: Db, id: string, opts: { project?: string; scope?: "pr
   let branchChoiceCount = 0;
   let replies: any[] = [];
   let traversalTruncated = false;
-  if ((opts.direction === "forward" || opts.direction === "both") && (doc.source === "pi" || doc.source === "claude")) {
+  if ((opts.direction === "forward" || opts.direction === "both") && (doc.source === "pi" || doc.source === "claude" || doc.source === "grok")) {
     let current = doc.entry_id;
     const seen = new Set<string>([current]);
     let visited = 0;

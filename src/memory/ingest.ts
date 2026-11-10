@@ -71,6 +71,10 @@ const MAX_WIKI_PAGE = 512 * 1024;
 const MAX_WIKI_PAGES = 10_000;
 const MAX_CLAUDE_FILE = 64 * 1024 * 1024;
 const MAX_CLAUDE_FILES = 50_000;
+const MAX_GROK_FILE = 256 * 1024 * 1024;
+const MAX_GROK_FILES = 50_000;
+const MAX_GROK_RESPONSES = 1_000_000;
+const GROK_NIL_PARENT = "00000000-0000-4000-8000-000000000000";
 
 // claude.ai web exports: one JSON document per conversation, chat_messages with
 // uuid/parent_message_uuid/sender/content blocks. session_id is the export uuid;
@@ -140,6 +144,150 @@ export function ingestClaude(db: DatabaseSync, root: string) {
   let removed = 0;
   if (stale.length) transaction(db, () => { for (const row of stale) { db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source, row.file); const still = db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source, row.session_id); if (!still) { db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source, row.session_id); removed++; } } });
   return { source, indexed, unchanged, removed, duplicates, errors };
+}
+
+// grok.com data exports: prod-grok-backend.json holds {conversations:[{conversation,
+// responses:[{response, share_link}]}]}. Each response has _id, message (plain
+// string), sender, parent_response_id, children, model, and a MongoDB-style
+// create_time {$date:{$numberLong}}. session_id is conversation.id; project is
+// the constant "grok". The thread is a tree via parent_response_id/children, so
+// forward expansion follows the unique child chain like pi/claude.
+// Duplicate conversation ids across export files merge by freshness: exports
+// are full per-conversation snapshots carrying modify_time, so the newest
+// snapshot supersedes older ones entirely (ties break to the first file in
+// sorted order). Deleting a newer export falls back to the older snapshot.
+function grokSenderRole(sender: unknown): string | null {
+  return sender === "human" ? "user" : typeof sender === "string" && sender && sender !== "human" ? "assistant" : null;
+}
+// conversation.modify_time is an ISO string in observed exports; tolerate the
+// MongoDB {$date} shape too. Unparseable values sort oldest.
+function grokModifyTime(value: unknown): number {
+  if (typeof value === "string") { const t = Date.parse(value); return Number.isNaN(t) ? 0 : t; }
+  const iso = grokTimestamp(value);
+  return iso ? Date.parse(iso) : 0;
+}
+function grokTimestamp(createTime: unknown): string | null {
+  if (!createTime || typeof createTime !== "object") return null;
+  const ms = (createTime as any).$date?.$numberLong;
+  if (ms === undefined || ms === null) return null;
+  const date = new Date(Number(ms));
+  return Number.isNaN(date.valueOf()) ? null : date.toISOString();
+}
+function grokRecords(file: string): { conversations: { sessionId: string; title: string | null; entries: Entry[] }[]; fingerprint: string; size: number } {
+  const st = lstatSync(file);
+  if (st.isSymbolicLink() || !st.isFile()) throw new Error(`Unexpected non-regular Grok export entry: ${file}`);
+  if (st.size > MAX_GROK_FILE) throw new Error(`Grok export exceeds ${MAX_GROK_FILE} byte limit: ${file}`);
+  const bytes = readFileSync(file);
+  let data: any;
+  try { data = JSON.parse(bytes.toString("utf8")); } catch { throw new Error(`Malformed Grok export JSON: ${file}`); }
+  if (!data || !Array.isArray(data.conversations)) throw new Error(`Unsupported Grok export format in ${file}; expected a conversations array`);
+  const conversations: { sessionId: string; title: string | null; modifyTime: number; entries: Entry[] }[] = [];
+  let total = 0;
+  for (const item of data.conversations) {
+    const conv = item?.conversation;
+    const responses = item?.responses;
+    if (!conv || typeof conv.id !== "string" || !Array.isArray(responses)) throw new Error(`Unsupported Grok conversation shape in ${file}; expected conversation.id and responses[]`);
+    const entries: Entry[] = []; const ids = new Set<string>();
+    for (const wrapper of responses) {
+      const r = wrapper?.response;
+      if (!r || typeof r._id !== "string" || ids.has(r._id)) throw new Error(`Invalid or duplicate Grok response in ${file}; snapshot left unchanged`);
+      ids.add(r._id);
+      total++;
+      if (total > MAX_GROK_RESPONSES) throw new Error(`Grok response count exceeded ${MAX_GROK_RESPONSES}`);
+      const role = grokSenderRole(r.sender);
+      const text = typeof r.message === "string" ? r.message : "";
+      const parent = typeof r.parent_response_id === "string" && r.parent_response_id && r.parent_response_id !== GROK_NIL_PARENT ? r.parent_response_id : null;
+      const timestamp = grokTimestamp(r.create_time);
+      entries.push({ entry_id: r._id, parent_id: parent, role, kind: "message", timestamp, text, indexable: Boolean(role && text.trim()), metadata: { model: typeof r.model === "string" && r.model ? r.model : undefined, sender: typeof r.sender === "string" ? r.sender : undefined, webSearch: Array.isArray(r.web_search_results) && r.web_search_results.length > 0 ? true : undefined } });
+    }
+    conversations.push({ sessionId: conv.id, title: typeof conv.title === "string" && conv.title ? conv.title : null, modifyTime: grokModifyTime(conv.modify_time), entries });
+  }
+  return { conversations, fingerprint: hash(bytes), size: bytes.length };
+}
+
+export function ingestGrok(db: DatabaseSync, root: string) {
+  const source = "grok"; const normalized = path.resolve(root);
+  const configured = db.prepare("SELECT root FROM source_config WHERE source=?").get(source) as any;
+  if (configured && configured.root !== normalized) throw new Error(`Source ${source} is already registered at ${configured.root}; refusing to reconcile a different path`);
+  let rootStat;
+  try { rootStat = lstatSync(root); } catch (e: any) { if (e?.code === "ENOENT") return { source, missing: true, indexed: 0, unchanged: 0, removed: 0, duplicates: 0, skipped: [] as string[], errors: [] as string[] }; throw e; }
+  if (rootStat.isSymbolicLink()) throw new Error(`Grok exports root must not be a symlink: ${root}`);
+  // Accept either a single prod-grok-backend.json file or a directory holding it.
+  // Real export dirs also carry auth/billing/account JSONs that are not
+  // conversations; only the grok-backend files hold the conversation tree, so
+  // the walk is restricted to those. Other JSONs are reported as skipped (not
+  // errors) so a new file type in a future export format is visible rather
+  // than silently ignored.
+  let files: string[];
+  const skipped: string[] = [];
+  if (rootStat.isDirectory()) {
+    files = [];
+    const stack = [root];
+    while (stack.length) {
+      const dir = stack.pop()!;
+      for (const name of readdirSync(dir)) {
+        const file = path.join(dir, name);
+        const st = lstatSync(file);
+        if (st.isSymbolicLink()) throw new Error(`Symlink in Grok exports tree; refusing an incomplete snapshot: ${file}`);
+        if (st.isDirectory()) { stack.push(file); continue; }
+        if (!st.isFile() || !name.endsWith(".json")) continue;
+        if (/^prod-grok-backend.*\.json$/.test(name)) files.push(file);
+        else if (skipped.length < 100) skipped.push(file);
+      }
+    }
+    files.sort();
+    skipped.sort();
+  } else if (rootStat.isFile()) {
+    files = [normalized];
+  } else {
+    throw new Error(`Grok exports root must be a real file or directory: ${root}`);
+  }
+  if (files.length > MAX_GROK_FILES) throw new Error(`Grok export count exceeded ${MAX_GROK_FILES}`);
+  registerSource(db, source, normalized);
+  // Merge pass across all files: group conversation snapshots by id and elect
+  // the one with the latest modify_time as the winner. Only winners are
+  // indexed; shadowed snapshots are counted as duplicates.
+  const found = new Set<string>(); const errors: string[] = [];
+  const fileData = new Map<string, { fingerprint: string; size: number }>();
+  const winners = new Map<string, { file: string; conv: { sessionId: string; title: string | null; modifyTime: number; entries: Entry[] } }>();
+  let duplicates = 0;
+  for (const file of files) {
+    found.add(file);
+    let data;
+    try { data = grokRecords(file); } catch (error) { errors.push(`${file}: ${(error as Error).message}`); continue; }
+    fileData.set(file, { fingerprint: data.fingerprint, size: data.size });
+    for (const conv of data.conversations) {
+      const prior = winners.get(conv.sessionId);
+      if (prior) {
+        duplicates++;
+        if (conv.modifyTime > prior.conv.modifyTime) winners.set(conv.sessionId, { file, conv });
+        continue;
+      }
+      winners.set(conv.sessionId, { file, conv });
+    }
+  }
+  let indexed = 0, unchanged = 0;
+  for (const [sessionId, winner] of winners) {
+    const data = fileData.get(winner.file)!;
+    const fileKey = `${winner.file}#${sessionId}`;
+    const prior = db.prepare("SELECT session_id,fingerprint FROM source_files WHERE source=? AND file=?").get(source, fileKey) as any;
+    const convFingerprint = createHash("sha256").update(data.fingerprint).update("\0").update(sessionId).digest("hex");
+    if (prior?.fingerprint === convFingerprint) { unchanged++; continue; }
+    replaceFileSession(db, source, fileKey, prior?.session_id, sessionId, "grok", winner.conv.entries, convFingerprint, data.size, { title: winner.conv.title ?? undefined });
+    indexed++;
+  }
+  // A row is stale when its file vanished, its session has no winner, or the
+  // session's winner lives in a different file (superseded snapshot). The
+  // winner's row keeps the session alive via the `still` check below.
+  const stale = (db.prepare("SELECT file,session_id FROM source_files WHERE source=?").all(source) as any[]).filter(r => {
+    const hashAt = r.file.lastIndexOf("#");
+    const baseFile = hashAt > 0 ? r.file.slice(0, hashAt) : r.file;
+    const winner = winners.get(r.session_id);
+    return !found.has(baseFile) || !winner || winner.file !== baseFile;
+  });
+  let removed = 0;
+  if (stale.length) transaction(db, () => { for (const row of stale) { db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source, row.file); const still = db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source, row.session_id); if (!still) { db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source, row.session_id); db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source, row.session_id); removed++; } } });
+  return { source, indexed, unchanged, removed, duplicates, skipped, errors };
 }
 
 function walkMarkdown(root: string): string[] {

@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 const execute = promisify(execFile);
 
 function validProvenance(value: any) {
-  return value && ["pi", "opencode", "claude", "wiki"].includes(value.source) && typeof value.sessionId === "string" && value.sessionId.length <= 200 && typeof value.project === "string" && value.project.length <= 4096 && typeof value.entryId === "string" && value.entryId.length <= 200 && typeof value.resultId === "string" && value.resultId.length <= 64;
+  return value && ["pi", "opencode", "claude", "grok", "wiki"].includes(value.source) && typeof value.sessionId === "string" && value.sessionId.length <= 200 && typeof value.project === "string" && value.project.length <= 4096 && typeof value.entryId === "string" && value.entryId.length <= 200 && typeof value.resultId === "string" && value.resultId.length <= 64;
 }
 
 export async function runMemoryWorker<T = any>(
@@ -41,7 +41,7 @@ export async function runMemoryWorker<T = any>(
     if (command === "search") {
       if (!Array.isArray(parsed.results) || parsed.results.length > 20) throw new Error("Memory worker returned invalid search results");
       for (const row of parsed.results) {
-        if (!row || !["pi", "opencode", "claude", "wiki"].includes(row.source) || !["user", "assistant", "page"].includes(row.role) ||
+        if (!row || !["pi", "opencode", "claude", "grok", "wiki"].includes(row.source) || !["user", "assistant", "page"].includes(row.role) ||
             !["result_id", "session_id", "entry_id", "project", "excerpt"].every(key => typeof row[key] === "string") ||
             row.result_id.length > 64 || row.session_id.length > 200 || row.entry_id.length > 200 || row.project.length > 4096 ||
             row.excerpt.length > 480 || Object.hasOwn(row, "text") || !Number.isFinite(row.score) ||
@@ -64,7 +64,7 @@ export async function runMemoryWorker<T = any>(
       }
     } else if (command === "expand") {
       const result = parsed.result;
-      if (!result || !["pi", "opencode", "claude", "wiki"].includes(result.source) || typeof result.text !== "string" || result.text.length > 8000 ||
+      if (!result || !["pi", "opencode", "claude", "grok", "wiki"].includes(result.source) || typeof result.text !== "string" || result.text.length > 8000 ||
           typeof result.sessionId !== "string" || result.sessionId.length > 200 || typeof result.entryId !== "string" || result.entryId.length > 200 ||
           typeof result.project !== "string" || result.project.length > 4096 || !result.branch || typeof result.branch !== "object" ||
           !validProvenance(result.provenance) || result.provenance.source !== result.source || result.provenance.sessionId !== result.sessionId ||

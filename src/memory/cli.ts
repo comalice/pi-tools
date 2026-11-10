@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expand, listSessions, openStore, status, SCHEMA_VERSION } from "./store.ts";
-import { ingestClaude, ingestOpenCode, ingestPi, ingestWiki } from "./ingest.ts";
+import { ingestClaude, ingestGrok, ingestOpenCode, ingestPi, ingestWiki } from "./ingest.ts";
 import { buildVectorIndex, refreshVectorIndex, searchMemory, vectorStatus } from "./semantic.ts";
 import { embedTexts, health, serviceUrls } from "./vector-client.ts";
 import { evaluateCases, readEvaluationCases } from "./evaluation.ts";
@@ -53,6 +53,7 @@ function defaults(options: Options) {
     opencode: value(options, "--opencode-db") || path.join(os.homedir(), ".local", "share", "opencode", "opencode.db"),
     wiki: value(options, "--wiki-dir") || process.env.PI_WIKI_DIR || path.join(agent, "wiki"),
     claude: value(options, "--claude-exports") || process.env.PI_CLAUDE_EXPORTS || path.join(agent, "claude-exports"),
+    grok: value(options, "--grok-exports") || process.env.PI_GROK_EXPORTS || path.join(agent, "grok-exports"),
   };
 }
 
@@ -107,11 +108,11 @@ try {
   if (!command) throw new Error("Usage: memory <ingest|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
 
   if (command === "ingest") {
-    only(out, ["--index", "--pi-sessions", "--opencode-db", "--wiki-dir", "--claude-exports"]);
+    only(out, ["--index", "--pi-sessions", "--opencode-db", "--wiki-dir", "--claude-exports", "--grok-exports"]);
     safeIndexLocation(paths.index, paths.pi, paths.opencode);
     const db = openStore(paths.index);
     try {
-      const sources = [ingestPi(db, paths.pi), ingestOpenCode(db, paths.opencode), ingestClaude(db, paths.claude), ingestWiki(db, paths.wiki)];
+      const sources = [ingestPi(db, paths.pi), ingestOpenCode(db, paths.opencode), ingestClaude(db, paths.claude), ingestGrok(db, paths.grok), ingestWiki(db, paths.wiki)];
       emit({ ok: true, sources, status: status(db) });
     } finally {
       db.close();
