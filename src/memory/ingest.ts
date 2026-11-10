@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -62,7 +62,7 @@ export function ingestPi(db:DatabaseSync,root:string,opts:{origin?:string}={}){
     if(prior?.fingerprint===data.fingerprint){unchanged++;continue;}
     const sessionId=String(data.header.id);
     const duplicate=db.prepare("SELECT file FROM source_files WHERE source=? AND session_id=? AND file<>? LIMIT 1").get(source,sessionId,file) as any;
-    if(duplicate)throw new Error(`Duplicate Pi session ID ${sessionId} in multiple files; snapshot left unchanged`);
+    if(duplicate && !(importBlobRoot(root, source) && !existsSync(duplicate.file)))throw new Error(`Duplicate Pi session ID ${sessionId} in multiple files; snapshot left unchanged`);
     const project=data.header.cwd?path.resolve(String(data.header.cwd)):"unknown";
     replaceFileSession(db,source,file,prior?.session_id,sessionId,project,data.entries,data.fingerprint,data.size,{origin:opts.origin});indexed++;
   }

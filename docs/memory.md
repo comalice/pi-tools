@@ -370,8 +370,46 @@ responses. The endpoints are:
   the local expansion result shape.
 - `POST /ingest` — JSON `{ "source": "pi", "filename": "session.jsonl",
   "content_base64": "..." }`. It stores the payload as a content-addressed
-  blob and ingests it with the authenticated spoke name as its origin. Pushes
-  are serialized in-process. OpenCode push is not supported.
+  blob and ingests it with the authenticated spoke name as its origin. An
+  updated push from the same spoke and filename replaces that prior session
+  snapshot; an exact re-push is deduplicated. Pushes are serialized
+  in-process. OpenCode push is not supported.
+
+### Spoke push
+
+On a spoke, `memory push` sends recursively discovered `*.jsonl` files from
+`~/.pi/agent/sessions/` to the configured hub with one authenticated `POST
+/ingest` per file. The `pi` source only is supported; OpenCode, Claude, and Grok
+exports are not pushed. The hub assigns the authenticated spoke identity as
+origin, so the spoke does not send or choose `origin`.
+
+The command reads `~/.pi/agent/memory/hub.json` (under
+`PI_CODING_AGENT_DIR` when set), in the form
+`{"hub":"http://<host>:<port>","token":"..."}`. It reports that `memory
+join` must be run first when the file is absent. The join workflow is handled
+separately. Hub URLs must be an HTTP(S) origin without a path; redirects are
+rejected so the bearer token is not forwarded elsewhere.
+
+Incrementality is tracked in `~/.pi/agent/memory/push-state.json`, mode 0600.
+Each relative session path has its byte size, modification time, and full
+SHA-256 fingerprint. The full hash is intentional: session files are
+append-mostly and hashing each file also detects same-size rewrites or restored
+mtimes, which a size/mtime-only check would silently miss. Unchanged files are
+not uploaded. Successful files advance their own watermark even if another
+file fails; failed files retain their old fingerprint and will be retried on
+the next run. The spoke tags the basename with a stable hash of its relative
+session path, so same-named files in different subdirectories stay distinct.
+The hub treats that uploaded filename as the snapshot key within the spoke,
+replacing earlier content when an append-mostly session changes. The last-run
+timestamp advances only after a wholly successful run. Failures are logged per file, processing continues, and any failure makes
+the command exit nonzero. There is no durable spool; hub-side content hashing
+makes an upload repeated after a crash safe.
+
+To install just the spoke timer (without installing or enabling hub services),
+run `make install-spoke`. It runs `memory push` every 15 minutes, starting two
+minutes after boot; configure the hub file first. Remove it with
+`make uninstall-spoke`. The timer is optional; run `npm run memory -- push` to
+push manually.
 
 The hub binds to `127.0.0.1:6342` by default. Configure `PI_HUB_BIND` /
 `PI_HUB_PORT` or `--bind` / `--port`; `resolveBindAddress` accepts only literal

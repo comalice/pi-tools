@@ -155,7 +155,7 @@ export function createMemoryHubServer(options: MemoryHubOptions = {}): { server:
           if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.content_base64)) throw new HttpError(400, "content_base64 must be canonical standard base64");
           const bytes = Buffer.from(input.content_base64, "base64");
           if (!bytes.length || bytes.length > MAX_PI_FILE || bytes.toString("base64") !== input.content_base64) throw new HttpError(400, "Decoded Pi session must contain 1 to 268435456 bytes of canonical base64");
-          return importPayload(writer, "pi", input.filename, bytes, path.join(path.dirname(index), "blobs"), { origin: spoke });
+          return importPayload(writer, "pi", input.filename, bytes, path.join(path.dirname(index), "blobs"), { origin: spoke, replaceFilename: true });
         });
         return send(res, 200, { ok: true, source: result.source, copied: result.copied, ingest: result.ingest });
       }
