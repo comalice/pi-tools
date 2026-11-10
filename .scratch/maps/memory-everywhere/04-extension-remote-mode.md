@@ -1,7 +1,7 @@
 # Extension remote mode
 
 **Type:** task
-**Status:** open
+**Status:** claimed
 **Blocked by:** pi-memory-hub service
 
 ## Question
