@@ -1,7 +1,7 @@
 # Blob store + import surfaces
 
 **Type:** task
-**Status:** claimed
+**Status:** open
 **Blocked by:** Origin provenance column
 
 ## Question
@@ -19,3 +19,9 @@ Make the memory system own its raw sources:
 This simplifies ticket 05: spoke push = POST session files to `/import`.
 
 ## Resolution
+
+### Phase A
+
+Implemented the local blob-store foundation for Claude and Grok exports. `memory import --source claude|grok PATH...` copies payloads into content-addressed, origin-scoped blobs and ingests from the registered blob root; repeated content imports reuse the existing path. Existing export registrations migrate with `memory import --backfill`, which copies current files, validates each manifest mapping by content hash, rewrites `source_files.file`, and repoints the configured root without a schema change. A subsequent ingest is tested to report unchanged files and zero removals. Import-root reconciliation preserves sessions when blobs disappear; `memory forget --source ... --session ...` or `--file ...` explicitly removes manifest rows, derived archive data, and unreferenced blobs. Legacy registrations require backfill before further `memory import` operations.
+
+Watch sources (`pi`, `opencode`, `wiki`) are unchanged. The hub `/import` endpoint, admin upload, extension import tool, and spoke-push integration remain Phase B work.
