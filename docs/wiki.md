@@ -139,3 +139,18 @@ the link title). Regenerate/extend with
 sessions cited by wiki pages and present in the entity mention sidecar.
 Tags on wiki pages link to `/tags/<tag>`, which mirrors the entity-page
 format.
+
+## Interlinking
+
+Pages interlink three ways, by editorial cost. **See also sections**
+(curated; `[[page:slug|title]]` wikilinks) carry judged relations — they are
+navigation, never provenance, and never enter frontmatter `sources`.
+**`wiki link-pages`** mechanically links prose mentions of page titles/slugs
+(zone-aware, first occurrence, no self-links); run it after edits like
+`link-entities`. Dangling `[[page:...]]` links are kept and render red as a
+discovery queue. The server shows a "linked from" backlink rail per page.
+Wiki search results (`memory_search`, all retrieval modes) carry
+`page_links` and `linked_from`, so agents can traverse the graph from any
+hit. Relation scoring for bootstrap/suggestions: 3x shared cited sessions +
+2x shared rare entities (linked by <= 4 pages) + topical tags only — status
+tags (fact/gotcha/decision/process) and common entities carry no signal.
