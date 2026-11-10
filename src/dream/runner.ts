@@ -23,6 +23,7 @@ const MAX_ATTEMPTS = 2;
 const ENTRY_ID_FORMAT: Record<string, string> = {
   pi: "the `id` fields of `message` records in the session JSONL (one record per line).",
   claude: "the `uuid` fields of messages in `chat_messages` (a claude.ai export JSON document).",
+  opencode: "the `id` fields of message rows (`msg_…`) in the OpenCode SQLite store.",
 };
 
 function parseArgs(argv: string[]) {
@@ -76,14 +77,19 @@ function enumerate() {
   db.exec("PRAGMA query_only=ON;");
   try {
     const rows = listSessions(db, since.toISOString(), 5000);
+    // OpenCode sessions are assembled from its SQLite store: row.file is the
+    // session id, so resolve the registered store path as the readable file.
+    const opencodeRoot = (db.prepare("SELECT root FROM source_config WHERE source='opencode'").get() as any)?.root as string | undefined;
     let considered = 0;
     for (const row of rows) {
       const existing = state.sessions[row.session_id];
       if (existing && existing.status !== "pending") continue;
-      if (!ENTRY_ID_FORMAT[row.source] || !row.file || !existsSync(row.file)) {
+      const file = row.source === "opencode" ? opencodeRoot : row.file;
+      if (!ENTRY_ID_FORMAT[row.source] || !file || !existsSync(file)) {
         state.sessions[row.session_id] = { status: "skipped", source: row.source, project: row.project, file: row.file ?? "", error: "no readable session file for this source" };
         continue;
       }
+      row.file = file;
       if (considered >= config.max) continue;
       considered++;
       state.sessions[row.session_id] = { status: "pending", source: row.source, project: row.project, file: row.file, first: row.first, last: row.last };

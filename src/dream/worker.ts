@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { writeStaging } from "../wiki/staging.ts";
@@ -44,6 +45,45 @@ export function digestPi(file: string): Message[] {
     if (text.trim()) messages.push({ id: obj.id, role, text });
   }
   return messages;
+}
+
+
+/** Assemble an OpenCode session from its SQLite store, mirroring the archive
+ * ingest eligibility: user/assistant messages before the revert boundary,
+ * excluding summaries/synthetic; text parts only, not synthetic/ignored. */
+export function digestOpenCode(dbFile: string, sessionId: string): Message[] {
+  const src = new DatabaseSync(dbFile, { readOnly: true, timeout: 5000 });
+  try {
+    src.exec("PRAGMA query_only=ON;");
+    const sess = src.prepare("SELECT id,revert FROM session WHERE id=?").get(sessionId) as any;
+    if (!sess) throw new Error(`OpenCode session not found: ${sessionId}`);
+    const revert = sess.revert ? JSON.parse(sess.revert) : null;
+    const boundary = revert?.messageID;
+    const boundaryPart = revert?.partID;
+    const rows = src.prepare("SELECT id,data,time_created FROM message WHERE session_id=? ORDER BY time_created,id LIMIT 50000").all(sessionId) as any[];
+    if (rows.length === 50000) throw new Error(`OpenCode session ${sessionId} exceeds per-session message limit`);
+    const decoded = rows.map((m) => ({ m, data: JSON.parse(m.data) }));
+    const boundaryIndex = boundary ? decoded.findIndex((x) => x.m.id === boundary) : -1;
+    const partStmt = src.prepare("SELECT id,json_extract(data,'$.type') AS type,json_extract(data,'$.text') AS text,COALESCE(json_extract(data,'$.synthetic'),0) AS synthetic,COALESCE(json_extract(data,'$.ignored'),0) AS ignored,COALESCE(json_extract(data,'$.ignoredReason'),'') AS ignored_reason FROM part WHERE message_id=? ORDER BY id LIMIT 1001");
+    const out: Message[] = [];
+    for (let i = 0; i < decoded.length; i++) {
+      const { m, data } = decoded[i];
+      const role = data?.role;
+      const visible = !boundary || i < boundaryIndex || (i === boundaryIndex && Boolean(boundaryPart));
+      const eligible = (role === "user" || role === "assistant") && visible && data?.summary !== true && !data?.synthetic;
+      if (!eligible) continue;
+      const parts = partStmt.all(m.id) as any[];
+      if (parts.length > 1000) throw new Error(`OpenCode message ${m.id} exceeds per-message part limit`);
+      const text = parts
+        .filter((p) => p.type === "text" && !p.synthetic && !p.ignored && !p.ignored_reason && typeof p.text === "string")
+        .map((p) => p.text)
+        .join("\n");
+      if (text.trim()) out.push({ id: m.id, role, text });
+    }
+    return out;
+  } finally {
+    src.close();
+  }
 }
 
 export function digestClaude(file: string): Message[] {
@@ -157,7 +197,7 @@ export const piGenerate: Generate = (model, prompt) => new Promise((resolve, rej
 export interface WorkerResult { staged: number; titles: string[]; chunks: number; chunkFailures: string[]; truncatedMessages: boolean }
 
 export async function runWorker(opts: { file: string; source: string; session: string; project: string; model: string; wikiDir?: string }, generate: Generate = piGenerate): Promise<WorkerResult> {
-  const messages = opts.source === "claude" ? digestClaude(opts.file) : digestPi(opts.file);
+  const messages = opts.source === "claude" ? digestClaude(opts.file) : opts.source === "opencode" ? digestOpenCode(opts.file, opts.session) : digestPi(opts.file);
   if (!messages.length) return { staged: 0, titles: [], chunks: 0, chunkFailures: [], truncatedMessages: false };
   const chunks = chunkMessages(messages);
   const wikiDir = opts.wikiDir ?? process.env.PI_WIKI_DIR ?? path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "wiki");

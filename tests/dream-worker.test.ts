@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { chunkMessages, digestClaude, digestPi, extractJsonArray, runWorker, validateExtractions } from "../src/dream/worker.ts";
 import { parsePage } from "../src/wiki/format.ts";
+import { DatabaseSync } from "node:sqlite";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -111,4 +112,36 @@ describe("dream worker harness", () => {
     assert.deepEqual(page.meta.sources, ["pi:s1:m0"]);
     assert.ok(page.meta.tags.includes("process"));
   });
+});
+
+
+it("digestOpenCode assembles eligible text from the SQLite store", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dream-oc-"));
+  dirs.push(dir);
+  const dbFile = path.join(dir, "opencode.db");
+  const db = new DatabaseSync(dbFile);
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, revert TEXT);
+    CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT, time_created TEXT);
+    CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, data TEXT);`);
+  db.prepare("INSERT INTO session VALUES ('ses_1', NULL)").run();
+  const msg = (id, role, extra) =>
+    db.prepare("INSERT INTO message VALUES (?, 'ses_1', ?, '2026-01-01T00:00:00Z')").run(id, JSON.stringify({ role, ...(extra ?? {}) }));
+  msg("msg_a", "user");
+  msg("msg_b", "assistant");
+  msg("msg_c", "tool");
+  msg("msg_d", "user", { summary: true });
+  const part = (id, mid, type, text, flags) =>
+    db.prepare("INSERT INTO part VALUES (?, ?, 'ses_1', ?)").run(id, mid, JSON.stringify({ type, text, ...(flags ?? {}) }));
+  part("p1", "msg_a", "text", "hello");
+  part("p2", "msg_a", "text", "world");
+  part("p3", "msg_b", "text", "answer");
+  part("p4", "msg_b", "text", "secret", { synthetic: true });
+  part("p5", "msg_b", "tool-call", null);
+  db.close();
+  const { digestOpenCode } = await import("../src/dream/worker.ts");
+  const out = digestOpenCode(dbFile, "ses_1");
+  assert.deepEqual(out, [
+    { id: "msg_a", role: "user", text: "hello\nworld" },
+    { id: "msg_b", role: "assistant", text: "answer" },
+  ]);
 });
