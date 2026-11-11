@@ -1,7 +1,7 @@
 # Spoke onboarding wizard
 
 **Type:** task
-**Status:** done
+**Status:** implemented — awaiting live validation (second-machine onboarding run, the ticket's done-when)
 **Blocked by:** None (re-scopes the closed memory join / git-hosting work into its human-facing shape)
 
 ## Question
@@ -34,3 +34,10 @@ Validation: `bash -n scripts/spoke-onboard.sh` passed; `shellcheck` was not
 installed; final `npm test` passed (160 tests), including the stdin-token join
 and wizard structure checks. The wizard was not run end-to-end because it
 requires an operator and a live hub.
+
+Review (2026-11, post-implementation): wizard stages, token handling
+(stdout capture → stdin handoff, 256-char/no-whitespace validation, revoke on
+abort), hub CLI JSON shapes, and docs verified against `src/memory/`.
+**Remaining gate:** run the wizard for real on a second machine (requires a
+live hub + operator); close the ticket when that succeeds. Also confirm the
+`join --status` reuse path against a real partial `hub.json` during that run.
