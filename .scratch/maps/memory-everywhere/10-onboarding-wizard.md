@@ -1,7 +1,7 @@
 # Spoke onboarding wizard
 
 **Type:** task
-**Status:** claimed
+**Status:** implemented — awaiting live validation (second-machine onboarding run, the ticket's done-when)
 **Blocked by:** None (re-scopes the closed memory join / git-hosting work into its human-facing shape)
 
 ## Question
@@ -19,3 +19,25 @@ Re-scope onboarding around `scripts/spoke-onboard.sh`, a wizard-skill script (li
 Done when: onboarding a real second machine is one wizard invocation with only confirmation gates and (where required) a sudo password, and `docs/memory.md` "Spoke onboarding" shrinks to "run the wizard" plus a manual fallback appendix.
 
 ## Resolution
+
+Implemented `scripts/spoke-onboard.sh` as a five-stage wizard using the
+`skills/wizard/template.sh` library unchanged through `run_wizard()`. It checks
+overlay/SSH and spoke prerequisites, prepares the hub over SSH with confirmation
+gates, captures the hub-minted token silently, enrolls the public SSH key before
+first join, invokes `pi-memory join` with the token streamed on stdin, then
+verifies status, push, and Git access. Pre-join aborts automatically revoke the
+just-minted token where possible; matching partial hub configs are reused on
+rerun with `--force`. The docs lead with the wizard and retain an ordered manual
+fallback.
+
+Validation: `bash -n scripts/spoke-onboard.sh` passed; `shellcheck` was not
+installed; final `npm test` passed (160 tests), including the stdin-token join
+and wizard structure checks. The wizard was not run end-to-end because it
+requires an operator and a live hub.
+
+Review (2026-11, post-implementation): wizard stages, token handling
+(stdout capture → stdin handoff, 256-char/no-whitespace validation, revoke on
+abort), hub CLI JSON shapes, and docs verified against `src/memory/`.
+**Remaining gate:** run the wizard for real on a second machine (requires a
+live hub + operator); close the ticket when that succeeds. Also confirm the
+`join --status` reuse path against a real partial `hub.json` during that run.
