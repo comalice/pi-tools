@@ -1,5 +1,11 @@
 # Agent scheduling
 
+Prerequisites (the payload scripts assume all of these): a systemd **user**
+session, `pi` at `/usr/bin/pi` (wakes exec that absolute path — symlink if
+your install lives elsewhere), `python3`, and for notifications `notify-send`
+plus a session D-Bus (`/run/user/<uid>/bus`). Wake failures surface only in
+`~/.pi/agent/schedule/logs/`.
+
 `extensions/schedule.ts` gives agents four tools over a shared core
 (`src/schedule/core.ts`): `schedule_notification` (desktop alert),
 `schedule_wake` (headless `pi --session <id> --print <prompt>` resume),

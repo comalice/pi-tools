@@ -34,13 +34,17 @@ search are not emitted as anchors.
 
 Upstream source and license attribution are recorded in `NOTICE`.
 
-Once an extension is added, load this local package with:
+Load the package with:
 
 ```sh
-pi install /home/albertlatham/git/dirac-pi-tools
+pi install /path/to/dirac-pi-tools
 ```
 
-Run the focused tests with `npm test`.
+(`make install-bin` does this too — registering the checkout with pi,
+installing npm dependencies, and dropping the `pi-memory`/`pi-wiki`/`pi-dream`
+CLI shims into `~/.local/bin`.)
+
+Run the test suite with `npm test`.
 
 ## Skills
 
@@ -53,7 +57,7 @@ offers to convert repeat findings into pre-commit hooks or
 `CODING_STANDARDS.md` rules. Design informed by Matt Pocock's `code-review`
 skill (MIT) and Geoff Huntley's writing on engineering away review slop.
 
-`fresh_review` runs up to three independent read-only review tasks in parallel,
+Also registered as an extension tool rather than a skill, `fresh_review` runs up to three independent read-only review tasks in parallel,
 each in a fresh Pi process using the active model. Workers have read/grep/find/ls
 only, with skills, extensions and MCP disabled; this is a tool allowlist, not an
 OS sandbox. Prompts and results consume model tokens. The parent must pin the
@@ -66,11 +70,17 @@ tests, and other evidence without editing it. Use
 the requested scope. Both use shared, on-demand guidance for different document
 types, rather than a separate skill for each type.
 
-See [durable memory](docs/memory.md) for archive ingestion, lexical
-and optional local hybrid/vector retrieval, navigable expansion, service setup,
-and rebuild limitations. Memory has no automatic recall; the extension keeps
-the archive current with a debounced background ingest at session start and
-after agent turns, while semantic indexing requires an explicit vector rebuild.
+The `memory` extension adds `memory_search`/`memory_expand` over a durable
+archive — see [durable memory](docs/memory.md) for ingestion, lexical and
+optional local hybrid/vector retrieval, navigable expansion, hub-and-spoke
+setup, and service deployment. Memory has no automatic recall; the extension
+keeps the archive current with a debounced background ingest, and semantic
+indexing is opted into with one explicit `vector-build` — subsequent rebuilds
+run as a debounced background refresh.
+
+See [the wiki](docs/wiki.md) for the curated wiki, dream-mode extraction, and
+librarian curation, and [scheduling](docs/scheduling.md) for the `schedule`
+extension's notifications and headless session wakes.
 
 See [language-server notes](docs/language-server-notes.md) for the deferred
 semantic-inspection direction.
