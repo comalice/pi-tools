@@ -5,8 +5,8 @@ are point-in-time diagnostics run against a small private local fixture (11
 cases: 9 known positives, 2 checked negatives — not stored in this repository).
 They explain *why* the current retrieval design looks the way it does; they are
 not benchmarks, not general quality claims, and not a basis for automatic
-recall. Current behavior is documented in memory.md; this file preserves how it
-was chosen.
+recall. Current behavior is documented in memory.md and the subsystem docs it
+links to; this file preserves how that behavior was chosen.
 
 ## Vector index milestones
 
