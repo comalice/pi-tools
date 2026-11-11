@@ -25,3 +25,12 @@ This simplifies ticket 05: spoke push = POST session files to `/import`.
 Implemented the local blob-store foundation for Claude and Grok exports. `memory import --source claude|grok PATH...` copies payloads into content-addressed, origin-scoped blobs and ingests from the registered blob root; repeated content imports reuse the existing path. Existing export registrations migrate with `memory import --backfill`, which copies current files, validates each manifest mapping by content hash, rewrites `source_files.file`, and repoints the configured root without a schema change. A subsequent ingest is tested to report unchanged files and zero removals. Import-root reconciliation preserves sessions when blobs disappear; `memory forget --source ... --session ...` or `--file ...` explicitly removes manifest rows, derived archive data, and unreferenced blobs. Legacy registrations require backfill before further `memory import` operations.
 
 Watch sources (`pi`, `opencode`, `wiki`) are unchanged. The hub `/import` endpoint, admin upload, extension import tool, and spoke-push integration remain Phase B work.
+
+### Phase A gap (found 2026-11-10, fixed same day)
+
+The first real spoke push (`Intermezzo`) 500'd: the hub push receiver imports
+through blobs, but `backfillImports` was hardcoded to `('claude','grok')`, so
+legacy hubs had no migration path for a watch-registered Pi source. Fix:
+backfill now covers `pi` too; the `pi-memory-ingest` unit imports the hub's own
+sessions (`memory import --source pi`) before reconciling watch sources, since
+a blob-registered Pi root no longer follows the live sessions directory.

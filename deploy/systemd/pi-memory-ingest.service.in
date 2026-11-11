@@ -4,5 +4,8 @@ Documentation=@REPO@/docs/memory.md
 
 [Service]
 Type=oneshot
+# Import the hub's own sessions into the blob store first (pi is an import
+# source since the backfill), then reconcile the remaining watch sources.
+ExecStart=@NODE@ --experimental-strip-types @REPO@/src/memory/cli.ts import --source pi %h/.pi/agent/sessions
 ExecStart=@NODE@ --experimental-strip-types @REPO@/src/memory/cli.ts ingest
 Nice=10

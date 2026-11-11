@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
-import { ingestClaude, ingestGrok } from "../src/memory/ingest.ts";
+import { ingestClaude, ingestGrok, ingestPi } from "../src/memory/ingest.ts";
 import { backfillImports, forgetImport, importFiles } from "../src/memory/blobs.ts";
 import { openStore, search } from "../src/memory/store.ts";
 
@@ -12,6 +12,16 @@ const dirs: string[] = [];
 afterEach(async () => {
   for (const directory of dirs.splice(0)) await fs.rm(directory, { recursive: true, force: true });
 });
+
+function piSession(root: string, projectDir: string, id: string, text: string) {
+  const directory = path.join(root, projectDir);
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+  return fs.mkdir(directory, { recursive: true }).then(() => fs.writeFile(
+    path.join(directory, `${id}.jsonl`),
+    line({ type: "session", version: 3, id, cwd: "/work/project" }) +
+    line({ type: "message", id: "u", parentId: null, message: { role: "user", content: [{ type: "text", text }] } }),
+  ));
+}
 
 function claudeExport(id: string, text: string) {
   return JSON.stringify({ uuid: id, chat_messages: [{ uuid: `${id}-message`, parent_message_uuid: null, sender: "human", content: [{ type: "text", text }] }] });
@@ -80,6 +90,28 @@ describe("memory export blobs", () => {
       assert.equal(next.indexed, 0);
       assert.equal(next.unchanged, 1);
       assert.equal(next.removed, 0);
+    } finally { db.close(); }
+  });
+
+  it("backfills a legacy Pi watch root so hub pushes can import through blobs", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-blobs-pi-"));
+    dirs.push(directory);
+    const sourceRoot = path.join(directory, "sessions");
+    await piSession(sourceRoot, "--home-spoke--", "pi-backfill-chat", "pi backfill durable phrase");
+    const db = openStore(path.join(directory, "archive.sqlite"));
+    try {
+      assert.equal(ingestPi(db, sourceRoot).indexed, 1);
+      const blobRoot = path.join(directory, "blobs");
+      const result = backfillImports(db, blobRoot);
+      assert.equal(result.sources.pi.copied, 1);
+      assert.equal((db.prepare("SELECT root FROM source_config WHERE source='pi'").get() as any).root, path.join(blobRoot, "pi"));
+      const stored = db.prepare("SELECT file FROM source_files WHERE source='pi'").get() as any;
+      assert.ok(stored.file.startsWith(path.join(blobRoot, "pi") + path.sep));
+      const next = ingestPi(db, path.join(blobRoot, "pi"));
+      assert.equal(next.indexed, 0);
+      assert.equal(next.unchanged, 1);
+      assert.equal(next.removed, 0);
+      assert.equal(search(db, { query: "pi backfill durable", scope: "all" }).length, 1);
     } finally { db.close(); }
   });
 

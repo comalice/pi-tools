@@ -98,8 +98,10 @@ points into this tree (Grok manifest keys also retain the adapter's `#session`
 suffix). No additional database schema is required. Blob directories/files
 are private (0700/0600).
 
-Existing Claude/Grok registrations must be migrated before their original
-export roots are retired. Run `memory import --backfill` while those registered
+Existing watch registrations (Claude, Grok, and — on hubs that predate the
+spoke-push receiver — Pi) must be migrated before hub pushes or further
+imports can proceed: the push receiver imports through blobs and refuses
+watch-registered sources. Run `memory import --backfill` while those registered
 roots still exist. Backfill copies their current files, maps every existing
 manifest row to exactly one blob by content hash, rewrites the manifest paths,
 and changes each registered root to its blob directory; an ambiguous or
@@ -110,7 +112,11 @@ longer load-bearing and may be moved or deleted. Future imports add blobs to
 the same source store. For import roots, a missing blob is not treated as a
 prune; use `memory forget --source pi|claude|grok --session ID` (or
 `--file PATH`) to explicitly remove an imported item and its derived archive rows. The forget
-command only operates on sources registered in blob-store mode.
+command only operates on sources registered in blob-store mode. On a hub
+whose Pi source is backfilled to blob mode, the hub's own sessions no longer
+arrive via plain `ingest`; the `pi-memory-ingest` unit imports them first
+(`memory import --source pi ~/.pi/agent/sessions`) before reconciling the
+remaining watch sources.
 
 Wiki pages are indexed as source `wiki`: one document per page, `session_id`
 set to the page slug, `role` set to `page`, `project` set to the constant

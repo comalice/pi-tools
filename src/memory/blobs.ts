@@ -208,7 +208,7 @@ function rowOrigins(db: DatabaseSync, source: ImportSource, session: string, fal
 export function backfillImports(db: DatabaseSync, blobDirectory: string) {
   const blobs = path.resolve(blobDirectory);
   const sources: Record<string, { copied: number; files: number }> = {};
-  const roots = db.prepare("SELECT source,root FROM source_config WHERE source IN ('claude','grok') ORDER BY source").all() as any[];
+  const roots = db.prepare("SELECT source,root FROM source_config WHERE source IN ('pi','claude','grok') ORDER BY source").all() as any[];
   const updates: { source: ImportSource; newFile: string; session: string; fingerprint: string; size: number; indexedAt: string }[] = [];
   const newRoots: { source: ImportSource; root: string }[] = [];
   const fallbackOrigin = originValue();
