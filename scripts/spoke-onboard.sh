@@ -223,6 +223,11 @@ ask HUB_ADDRESS "Hub Nebula/overlay address (hostname or IP, no scheme or port):
 ask HUB_PORT "Hub API port [6342]:" || die "No hub API port was entered."
 HUB_PORT=${HUB_PORT:-6342}
 [[ "$HUB_PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$HUB_PORT >= 1 && 10#$HUB_PORT <= 65535 )) || die "Hub API port must be an integer from 1 to 65535."
+LOCAL_USER=$(id -un)
+ask HUB_SSH_USER "Your login username on the hub [$LOCAL_USER]:" || die "No hub SSH username was entered."
+HUB_SSH_USER=${HUB_SSH_USER:-$LOCAL_USER}
+[[ "$HUB_SSH_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "Hub SSH username must be a plain Linux username (lowercase letters, digits, underscore, hyphen)."
+HUB_SSH="$HUB_SSH_USER@$HUB_ADDRESS"
 ask SPOKE_NAME "Confirm spoke name / hostname [$DETECTED_HOSTNAME]:" || die "No spoke name was entered."
 SPOKE_NAME=${SPOKE_NAME:-$DETECTED_HOSTNAME}
 [[ "$SPOKE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] || die "Spoke name must be 1–255 letters, digits, dots, underscores, or hyphens, and start with a letter or digit."
@@ -237,22 +242,22 @@ if [[ -e "$HUB_CONFIG_FILE" ]]; then
   REUSE_HUB_CONFIG=1
   say "Matching hub.json found; its token will be reused and join will back up the config with --force."
 fi
-say "Hub: $HUB_ADDRESS:$HUB_PORT · spoke identity: $SPOKE_NAME"
+say "Hub: $HUB_ADDRESS:$HUB_PORT (ssh as $HUB_SSH_USER) · spoke identity: $SPOKE_NAME"
 if ping -c 1 -W 3 "$HUB_ADDRESS" >/dev/null 2>&1; then
   say "Overlay ping succeeded."
 else
   warn "Ping did not succeed; ICMP may be blocked. Checking SSH reachability next."
 fi
-if ! ssh -o ConnectTimeout=8 "$HUB_ADDRESS" true; then
+if ! ssh -o ConnectTimeout=8 "$HUB_SSH" true; then
   cat >&2 <<EOF_INSTRUCTIONS
-Cannot reach the hub over SSH at $HUB_ADDRESS.
+Cannot reach the hub over SSH at $HUB_SSH.
 If this spoke is not on the Nebula/overlay network, stop here: have the network
 administrator enroll it using your deployment's Nebula CA/config procedure,
 install its assigned Nebula config/certificate/key, start Nebula, and verify
 that it receives an overlay address. Then rerun this wizard. Nebula enrollment
 and credential handling are human-only and are not automated here.
 If Nebula is already connected, first configure SSH access from this account to
-$HUB_ADDRESS and verify that the account has sudo access on the hub.
+$HUB_SSH and verify that $HUB_SSH_USER has sudo access on the hub.
 EOF_INSTRUCTIONS
   exit 1
 fi
@@ -269,34 +274,34 @@ say "Check the dedicated wikigit account and /home/wikigit/wiki.git; missing or 
 HUB_REPO=""
 ask HUB_REPO "Absolute path to the dirac-pi-tools checkout on the hub (contains package.json):" || die "No hub repository path was entered."
 [[ "$HUB_REPO" == /* && "$HUB_REPO" != *$'\n'* ]] || die "Enter the absolute path to the dirac-pi-tools checkout on the hub."
-GIT_SHELL=$(ssh "$HUB_ADDRESS" 'command -v git-shell') || die "Could not locate git-shell on the hub. Install git-shell and rerun."
+GIT_SHELL=$(ssh "$HUB_SSH" 'command -v git-shell') || die "Could not locate git-shell on the hub. Install git-shell and rerun."
 [[ "$GIT_SHELL" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "Hub returned an unexpected git-shell path; inspect it manually: $GIT_SHELL"
-GIT_ENTRY=$(ssh "$HUB_ADDRESS" 'getent passwd wikigit || true') || die "Could not inspect the wikigit account on the hub."
+GIT_ENTRY=$(ssh "$HUB_SSH" 'getent passwd wikigit || true') || die "Could not inspect the wikigit account on the hub."
 if [[ -z "$GIT_ENTRY" ]]; then
   say "The wikigit account is missing; it will be created with git-shell and home /home/wikigit."
   confirm "Create the dedicated wikigit user on the hub using sudo?" || die "Stopped before creating the hub git user."
-  ssh -tt "$HUB_ADDRESS" "sudo useradd --create-home --home-dir /home/wikigit --shell '$GIT_SHELL' wikigit" || die "Could not create the hub wikigit account."
-  GIT_ENTRY=$(ssh "$HUB_ADDRESS" 'getent passwd git') || die "Could not verify the newly created git account."
+  ssh -tt "$HUB_SSH" "sudo useradd --create-home --home-dir /home/wikigit --shell '$GIT_SHELL' wikigit" || die "Could not create the hub wikigit account."
+  GIT_ENTRY=$(ssh "$HUB_SSH" 'getent passwd wikigit') || die "Could not verify the newly created wikigit account."
 fi
 IFS=: read -r _ _ _ _ _ GIT_HOME GIT_ACCOUNT_SHELL <<< "$GIT_ENTRY"
 [[ "$GIT_HOME" == /home/wikigit ]] || die "The hub wikigit account's home is $GIT_HOME, not /home/wikigit. Resolve this manually before onboarding."
 if [[ "$GIT_ACCOUNT_SHELL" != "$GIT_SHELL" ]]; then
   say "The wikigit account uses $GIT_ACCOUNT_SHELL; required shell is $GIT_SHELL."
   confirm "Change the git account shell to git-shell using sudo?" || die "Stopped before changing the hub wikigit account shell."
-  ssh -tt "$HUB_ADDRESS" "sudo usermod --shell '$GIT_SHELL' wikigit" || die "Could not set git-shell for the hub wikigit account."
+  ssh -tt "$HUB_SSH" "sudo usermod --shell '$GIT_SHELL' wikigit" || die "Could not set git-shell for the hub wikigit account."
 fi
 say "Dedicated wikigit account is configured with git-shell."
-REPO_STATE=$(ssh "$HUB_ADDRESS" 'if [ ! -e /home/wikigit/wiki.git ]; then printf missing; elif [ "$(git -C /home/wikigit/wiki.git rev-parse --is-bare-repository 2>/dev/null)" = true ]; then printf bare; else printf invalid; fi') || die "Could not inspect /home/wikigit/wiki.git on the hub."
+REPO_STATE=$(ssh "$HUB_SSH" 'if [ ! -e /home/wikigit/wiki.git ]; then printf missing; elif [ "$(git -C /home/wikigit/wiki.git rev-parse --is-bare-repository 2>/dev/null)" = true ]; then printf bare; else printf invalid; fi') || die "Could not inspect /home/wikigit/wiki.git on the hub."
 if [[ "$REPO_STATE" == missing ]]; then
   say "The canonical bare repository is missing."
   confirm "Create /home/wikigit/wiki.git as a bare repository using sudo?" || die "Stopped before creating the hub wiki repository."
-  ssh -tt "$HUB_ADDRESS" 'sudo -u wikigit git init --bare /home/wikigit/wiki.git' || die "Could not create /home/wikigit/wiki.git."
-  REPO_STATE=$(ssh "$HUB_ADDRESS" 'git -C /home/wikigit/wiki.git rev-parse --is-bare-repository 2>/dev/null') || die "Could not verify the newly created /home/wikigit/wiki.git."
+  ssh -tt "$HUB_SSH" 'sudo -u wikigit git init --bare /home/wikigit/wiki.git' || die "Could not create /home/wikigit/wiki.git."
+  REPO_STATE=$(ssh "$HUB_SSH" 'git -C /home/wikigit/wiki.git rev-parse --is-bare-repository 2>/dev/null') || die "Could not verify the newly created /home/wikigit/wiki.git."
   [[ "$REPO_STATE" == true ]] || die "/home/wikigit/wiki.git was created but is not a valid bare repository. Inspect it manually."
-  REPO_OWNER=$(ssh "$HUB_ADDRESS" 'stat -c %U /home/wikigit/wiki.git') || die "Could not inspect ownership of /home/wikigit/wiki.git."
+  REPO_OWNER=$(ssh "$HUB_SSH" 'stat -c %U /home/wikigit/wiki.git') || die "Could not inspect ownership of /home/wikigit/wiki.git."
   [[ "$REPO_OWNER" == wikigit ]] || die "/home/wikigit/wiki.git was created but is owned by $REPO_OWNER, not wikigit. Resolve ownership manually."
 elif [[ "$REPO_STATE" == bare ]]; then
-  REPO_OWNER=$(ssh "$HUB_ADDRESS" 'stat -c %U /home/wikigit/wiki.git') || die "Could not inspect ownership of /home/wikigit/wiki.git."
+  REPO_OWNER=$(ssh "$HUB_SSH" 'stat -c %U /home/wikigit/wiki.git') || die "Could not inspect ownership of /home/wikigit/wiki.git."
   [[ "$REPO_OWNER" == wikigit ]] || die "/home/wikigit/wiki.git is bare but owned by $REPO_OWNER, not wikigit. Resolve ownership manually before onboarding."
   say "Canonical bare repository exists and is owned by wikigit."
 else
@@ -364,7 +369,7 @@ say "Enrolling the public key on the hub (comment: $SPOKE_NAME). Private key rem
 confirm "Append this spoke's public key to /home/wikigit/.ssh/authorized_keys on the hub using sudo?" || die "Stopped before enrolling the spoke SSH key."
 REMOTE_KEY_SCRIPT='set -euo pipefail; key=$(printf "%s" "$1" | base64 -d); [[ ! -L /home/wikigit/.ssh ]] || exit 1; install -d -o wikigit -g wikigit -m 700 /home/wikigit/.ssh; [[ ! -L /home/wikigit/.ssh/authorized_keys ]] || exit 1; [[ ! -e /home/wikigit/.ssh/authorized_keys || -f /home/wikigit/.ssh/authorized_keys ]] || exit 1; touch /home/wikigit/.ssh/authorized_keys; chown wikigit:wikigit /home/wikigit/.ssh/authorized_keys; chmod 600 /home/wikigit/.ssh/authorized_keys; if grep -Fxq -- "$key" /home/wikigit/.ssh/authorized_keys; then printf "Public key already enrolled.\\n"; else printf "%s\\n" "$key" >> /home/wikigit/.ssh/authorized_keys; printf "Public key enrolled.\\n"; fi'
 printf -v REMOTE_KEY_COMMAND 'sudo bash -c %q -- %q' "$REMOTE_KEY_SCRIPT" "$PUBKEY_B64"
-ssh -tt "$HUB_ADDRESS" "$REMOTE_KEY_COMMAND" || die "Could not enroll the public key on the hub. The unjoined token will be revoked automatically; check whether the key was appended before rerunning."
+ssh -tt "$HUB_SSH" "$REMOTE_KEY_COMMAND" || die "Could not enroll the public key on the hub. The unjoined token will be revoked automatically; check whether the key was appended before rerunning."
 unset PUBKEY_B64 REMOTE_KEY_SCRIPT REMOTE_KEY_COMMAND PUBKEY_LINE KEY_FIELDS
 say "SSH key enrollment completed before the first wiki clone."
 
@@ -400,7 +405,7 @@ hub_token_cli() {
   local action="$1" spoke="${2:-}" remote_script remote_command
   remote_script='set -euo pipefail; repo=$(printf "%s" "$1" | base64 -d); cd -- "$repo"; if [[ -n "$3" ]]; then npm run --silent memory -- hub-token "$2" "$3"; else npm run --silent memory -- hub-token "$2"; fi'
   printf -v remote_command 'bash -c %q -- %q %q %q' "$remote_script" "$HUB_REPO_B64" "$action" "$spoke"
-  ssh "$HUB_ADDRESS" "$remote_command"
+  ssh "$HUB_SSH" "$remote_command"
 }
 
 cleanup_unjoined_token() {

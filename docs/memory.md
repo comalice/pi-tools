@@ -385,7 +385,7 @@ root:
 ```
 
 The wizard needs `pi-memory` on `PATH`, `make`, a working `systemctl --user`
-manager, and SSH access to the hub account with sudo permission for the hub-side
+manager, and SSH access to a hub account with sudo permission for the hub-side
 setup. If the command is not installed, run `make install-bin` from this
 checkout first; it installs under `~/.local/bin`, which must also be on
 `PATH`. The user manager is required because `join` installs the push timer.
@@ -393,7 +393,9 @@ Without one, use the manual fallback with `pi-memory join --no-push` and run
 `pi-memory push` manually. The hub must already have a working wiki clone
 whose `origin` is `/home/wikigit/wiki.git`, so librarian commits can reach the bare
 repository; the wizard checks/creates the bare repo but does not configure the
-hub clone. The wizard checks overlay reachability, asks for the hub repository
+hub clone. The wizard checks overlay reachability, asks for your hub SSH login
+name (defaulting to the local username — the spoke and hub accounts may
+differ) and the hub repository
 checkout path, checks or (after confirmation) creates the `wikigit`/`git-shell`
 account and `/home/wikigit/wiki.git`, mints the spoke token on the hub without
 displaying it, enrolls the spoke's public ed25519 key before joining, then
