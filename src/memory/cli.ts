@@ -366,7 +366,11 @@ try {
     if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run ingest first`);
     const limit = value(out, "--limit") === undefined ? undefined : positiveInt(value(out, "--limit"), "limit", 10000, 1, 1_000_000);
     const { scanEntities } = await import("../entity/scan.ts");
-    emit({ ok: true, scan: scanEntities({ archivePath: paths.index, registryPath: path.join(paths.wiki, "entities.json"), limit }) });
+    // Place the sidecar beside the (possibly overridden) index so
+    // entity-dossier and the wiki server — which both resolve it as
+    // dirname(index)/entities.sqlite — find the scan this command just ran.
+    const dbPath = path.join(path.dirname(paths.index), "entities.sqlite");
+    emit({ ok: true, scan: scanEntities({ archivePath: paths.index, registryPath: path.join(paths.wiki, "entities.json"), dbPath, limit }) });
   } else if (command === "entity-dossier") {
     only(out, ["--index", "--wiki-dir", "--entity", "--top", "--model", "--max-docs", "--rebuild"]);
     if (!existsSync(paths.index)) throw new Error(`Memory index not found at ${paths.index}. Run ingest first`);

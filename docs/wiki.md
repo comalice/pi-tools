@@ -114,7 +114,7 @@ retried dream worker overwrites its own staging file instead of duplicating.
 Dream output is derived and fallible. It must never re-enter the archive as
 conversation evidence: staging lives outside the indexed sources, and only
 librarian-curated pages — with verified citations — become searchable. Search
-results label wiki rows as `curated wiki`, distinct from `historical evidence`.
+results label wiki rows as `curated wiki page`, distinct from `historical evidence`.
 
 This separation is what makes the dream → librarian loop safe to run
 repeatedly: the archive only ever contains raw sessions and reviewed pages,
@@ -179,6 +179,10 @@ navigation, never provenance, and never enter frontmatter `sources`.
 discovery queue. The server shows a "linked from" backlink rail per page.
 Wiki search results (`memory_search`, all retrieval modes) carry
 `page_links` and `linked_from`, so agents can traverse the graph from any
-hit. Relation scoring for bootstrap/suggestions: 3x shared cited sessions +
-2x shared rare entities (linked by <= 4 pages) + topical tags only — status
-tags (fact/gotcha/decision/process) and common entities carry no signal.
+hit.
+
+When the librarian weighs candidate relations (bootstrap or suggestions),
+apply this guidance: 3x shared cited sessions + 2x shared rare entities
+(linked by <= 4 pages) + topical tags only — status tags
+(fact/gotcha/decision/process) and common entities carry no signal. This is
+editorial guidance for the curator's judgment, not a mechanism in code.

@@ -1,8 +1,15 @@
 # memory join onboarding
 
 **Type:** task
-**Status:** closed
+**Status:** closed — partially superseded
 **Blocked by:** pi-memory-hub service, Git hosting on the hub
+
+**Supersession (ticket 11):** the SSH parts of the shipped `join` — the managed
+`Host memory-hub` config block and HITL key enrollment — were removed when
+ticket 11 replaced SSH hosting with git-over-hub-HTTP and spoke-generated
+enrollment. `join` now takes a `pih1` bundle, writes `hub.json`, clones the
+wiki over token-gated HTTP, and enables the push timer. The status-verify,
+hub.json, clone, and push-timer resolutions below still stand.
 
 ## Question
 

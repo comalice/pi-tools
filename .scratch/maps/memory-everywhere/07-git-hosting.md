@@ -19,7 +19,7 @@ Surveyed four options:
 3. **Gitea/Forgejo** — rejected: users/PRs/web UI for a one-user system; another stateful service (own DB, config) that the hub-export bundle would have to carry. If the managed-service fog ever graduates, a real hosting layer is decided there, not here.
 4. **Smart-HTTP inside `pi-memory-hub`** — rejected for v1: `git http-backend` behind our node server is workable but weird, and reusing the hub token was the only attraction. Keeping the hub service small beats consolidating transports. Revisit if SSH key management ever becomes the pain point.
 
-Setup (documented for ticket 06 and the runbook):
+Setup (documented for ticket 06 and the runbook) — **superseded by ticket 11, kept for history:** there is no `git` unix account and no `authorized_keys` under the shipped design; the hub serves `wiki.git` over token-gated HTTP from `$PI_CODING_AGENT_DIR/wiki-git/`:
 
 - Hub: `useradd -m -s /usr/bin/git-shell git`; canonical remote at `/home/git/wiki.git` (bare). The hub's working clone `~/.pi/agent/wiki` gets `origin` pointing at the bare repo; librarian commits push as today.
 - Spoke addressing: `memory join` writes a `Host memory-hub` entry (with the hub's current Nebula IP) into the spoke's `~/.ssh/config`; the git remote is `git@memory-hub:wiki.git`. No IPs in remotes, no sudo — this is the v1 answer to hub mobility for git, matching the `hub.json` pointer for the API. A hub move = re-run `memory join` (rewrites both pointers).

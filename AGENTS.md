@@ -10,7 +10,7 @@ Tools, extensions, and skills for pi: memory archive, wiki, entity layer, dream/
 
 ## Pointers
 
-- `docs/` — memory, wiki, scheduling operations
+- `docs/` — memory (root + ingestion/retrieval/vectors/hub), wiki, scheduling, memory services, language-server notes
 - `.scratch/maps/` — wayfinder maps (active: `memory-everywhere`)
 - `skills/VENDORED.md` — provenance and adaptation notes for vendored skills
 - `deploy/systemd/` — unit templates; install via the Makefile
