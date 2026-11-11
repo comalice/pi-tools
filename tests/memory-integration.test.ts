@@ -69,7 +69,11 @@ describe("memory integration regressions", () => {
   it("executes registered Pi tools through the real worker without a model call", async () => {
     replaceSession(database, "pi", "previous-session", "/project", [entry("u", "synthetic alpha beta decision")], { origin: "integration-spoke" });
     const previousIndex = process.env.PI_MEMORY_INDEX;
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_MEMORY_INDEX = filename;
+    // Hermetic: the temp agent dir has no memory/hub.json, so the extension
+    // exercises the local worker even on hosts with a hub configured.
+    process.env.PI_CODING_AGENT_DIR = directory;
     try {
       const tools = new Map<string, any>();
       registerMemory({ registerTool: (tool: any) => tools.set(tool.name, tool), on: () => () => {} } as any);
@@ -91,6 +95,8 @@ describe("memory integration regressions", () => {
     } finally {
       if (previousIndex === undefined) delete process.env.PI_MEMORY_INDEX;
       else process.env.PI_MEMORY_INDEX = previousIndex;
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     }
   });
 });
