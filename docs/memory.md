@@ -1,9 +1,9 @@
 # Durable memory archive
 
 The archive is an **explicitly ingested, local SQLite/FTS5 store** exposed by
-`memory_search` and `memory_expand`. The second milestone adds an optional,
-rebuildable local vector index. There is still no automatic recall, reranker,
-generated summary, or model call from the extension itself.
+`memory_search` and `memory_expand`, with an optional, rebuildable local
+vector index for semantic and hybrid retrieval. There is no automatic recall,
+reranker, generated summary, or model call from the extension itself.
 
 To keep the archive current, the extension runs a **debounced background
 ingest** at `session_start` and after each `agent_end`: at most one ingest at
@@ -213,55 +213,19 @@ semantic. `semantic` fails clearly when no valid local index/services exist.
 Force lexical for comparison. The default cosine floor is **0.75**, a visible,
 configurable conservative filter (`--cosine-floor`). It was sanity-checked against
 a small synthetic real-model query set, not calibrated broadly, and is not a
-general quality threshold. A private 11-case local pilot (9 known positives, 2
-checked negatives) found that lexical and hybrid each recovered 6/9 positives
-in the top five; semantic-only recovered 1/9 at the default 0.75 floor. Lowering
-the floor to 0.65 raised semantic-only recall to 3/9 but returned an unrelated
-result for one negative; at 0.50 it returned results for both negatives. An
-intermediate 0.70 sweep found 3/9 semantic positives with no results for the two
-negatives; at 0.68 it retained those positives but returned a candidate for one
-negative. At 0.70 hybrid stayed at 6/9 but MRR fell from 0.593 to 0.467. Hybrid
-did not recover any of the three deliberately lexical-hard positives. A
-post-hoc lexical gate requiring six distinct query-term hits removed the one
-lexical negative but also reduced positive recall from 6/9 to 5/9, so no gate was
-added. This small, selected set is diagnostic—not a general benchmark or basis
-for automatic recall.
+general quality threshold.
 
-Full-corpus local cosine comparisons used the same 17,652 chunks and did not
-justify replacing the active index. `snowflake/snowflake-arctic-embed-s` hit 1/9
-positives at 0.75 and 2/9 at 0.65, while returning candidates for both negatives
-at each floor. `BAAI/bge-base-en-v1.5` hit 0/9 at 0.75 and 3/9 at 0.65 with no
-negative candidates; at 0.50 it remained at 3/9 and returned a candidate for one
-negative. BGE-base is 768-dimensional and its full local evaluation took about
-54 minutes.
-
-A local audit of the current BGE-small ANN results found expected-message recall
-of 3/9 at five, 4/9 at 20, 7/9 at 50 and 100, and 8/9 in the top 1,000 returned
-vector points after message deduplication (approximate Qdrant ranks, no cosine
-floor). Of the three lexical-hard positives, two were present at unique-message
-ranks 28 and 141 with best chunk cosines 0.663 and 0.683. The rank-28 target's
-best chunk is at vector-point 39, but it falls beyond the 20-message output
-limit; the rank-141 target is at point 159, beyond the current 40-point fetch.
-The third was absent from the returned top 1,000, with best target-chunk cosine
-0.622. None of the expected
-target-message chunks exceeded BGE-small's 512-token truncation limit (maximum
-observed: 399 tokens). This rules out truncation for these labeled messages, but
-not a mismatch between the expected answer span and its best-scoring chunk.
-
-A provisional local reranker trial used `Xenova/ms-marco-MiniLM-L-6-v2` on the
-union of the top 20 lexical excerpts and the top 50, 100, or 200 unfiltered
-Qdrant chunk points. Message-level candidate recall was 7/9 at pools 50/100 and
-8/9 at 200. Reranked hit@5 was 6/9 at pools 50/100 and 7/9 at 200, but MRR at
-200 was 0.565 versus 0.593 for current hybrid; the new hit was the rank-141
-candidate promoted to rank 4. The target absent from the top 1,000 remained
-absent. This uses expected message IDs as a proxy, not human-judged answer spans,
-so it is not sufficient to adopt the reranker. Weights were fetched separately;
-the evaluation itself ran with networking disabled.
+The defaults encode what local evaluation showed: semantic-only retrieval was
+weak at conservative floors, and the evaluated alternatives — different
+embedders, a lexical gate, a neural reranker — did not justify changing the
+design. That is why hybrid fusion is the default when vectors exist, why
+embedding-only matches should be treated as exploratory, and why no reranker
+ships. The evaluation narratives are preserved in
+[`memory-history.md`](memory-history.md).
 
 Retrieval uses reciprocal-rank fusion rather than adding BM25 and cosine scores,
-with distinct cue coverage and parent-message deduplication. Treat embedding-only
-matches as exploratory until they perform better on a wider set of paraphrased
-recall questions. Each result has historical provenance and a match-centered
+with distinct cue coverage and parent-message deduplication. Each result has
+historical provenance and a match-centered
 snippet with UTF-16 `snippet_start`/`snippet_end` offsets into the indexed
 message. Vector results use their matching chunk as the excerpt. No raw source
 text or vector payload dump is returned.
@@ -270,7 +234,6 @@ Search requires a project filter unless `--all` is explicit. Source, session,
 project, and current-session exclusions are applied to lexical lookup and to
 vector metadata filters; they are checked again against SQLite before returning
 a vector result. Candidate counts and elapsed time are diagnostic metadata.
-There is no neural reranker or automatic recall.
 
 Expansion supports `--max-chars`, `--offset`, and `--direction`; the tool uses
 `maxChars`, `offset`, and `direction` with the same bounds/meaning. The selected
@@ -297,8 +260,8 @@ edges, including non-indexed metadata. It indexes original user/assistant text
 blocks only; thinking, system, tool output, custom entries, and other
 non-text blocks are excluded. Pi file ingestion sees the persisted tree, not an
 unsaved live leaf selection. OpenCode imports eligible text parts only. Its
-current importer performs bounded per-session reconciliation instead of
-incremental event-sequence sync.
+importer performs bounded per-session reconciliation rather than incremental
+event-sequence sync.
 
 ## Extension behavior and limitations
 
@@ -343,9 +306,8 @@ walk/read errors as deletions.
 ## Entity gazetteer
 
 `~/.pi/agent/wiki/entities.json` is a git-tracked registry of known entities
-(canonical name, type, aliases, status: auto|confirmed|rejected). It was
-seeded by a GLiNER NER pass over the archive and is curated by editing the
-file. `npm run memory -- entity-scan` rebuilds
+(canonical name, type, aliases, status: auto|confirmed|rejected), curated by
+editing the file. `npm run memory -- entity-scan` rebuilds
 `~/.pi/agent/memory/entities.sqlite` — aggregated entity mentions across the
 whole archive (entity → documents with counts and offsets) via Aho-Corasick
 dictionary matching. The sidecar is derived data: safe to delete, rebuilt in
