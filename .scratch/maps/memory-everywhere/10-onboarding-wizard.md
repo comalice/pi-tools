@@ -1,7 +1,7 @@
 # Spoke onboarding wizard
 
 **Type:** task
-**Status:** implemented — awaiting live validation (second-machine onboarding run, the ticket's done-when)
+**Status:** retired — superseded by [ticket 11](11-git-over-http-enroll.md) before the live run (see below)
 **Blocked by:** None (re-scopes the closed memory join / git-hosting work into its human-facing shape)
 
 ## Question
@@ -41,6 +41,12 @@ abort), hub CLI JSON shapes, and docs verified against `src/memory/`.
 **Remaining gate:** run the wizard for real on a second machine (requires a
 live hub + operator); close the ticket when that succeeds. Also confirm the
 `join --status` reuse path against a real partial `hub.json` during that run.
+
+Retirement (2026-11-10): the first live run was abandoned by the operator —
+too many credentials (unix account + SSH key + token) and 10+ sudo prompts
+from per-step ssh round-trips. Ticket 11 replaces the whole approach with
+git-over-hub-HTTP and spoke-generated enrollment; the wizard is deleted. Its
+live-validation gate transfers to ticket 11's done-when.
 
 Repair (2026-11, pre-live-run): the hub-side stage would have died on its own
 check — the hub already has a `git` user (home `/`, from the transitional
