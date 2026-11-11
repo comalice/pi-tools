@@ -1,7 +1,7 @@
 # Spoke onboarding wizard
 
 **Type:** task
-**Status:** open
+**Status:** claimed
 **Blocked by:** None (re-scopes the closed memory join / git-hosting work into its human-facing shape)
 
 ## Question
