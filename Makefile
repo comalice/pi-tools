@@ -43,7 +43,17 @@ test: ## Full test suite
 $(SYSTEMD_USER_DIR):
 	mkdir -p $(SYSTEMD_USER_DIR)
 
-install-bin: ## Install pi-memory/pi-wiki/pi-dream shims into ~/.local/bin and register the package with pi
+# The pi extensions import npm packages (diff, ts-morph); a fresh clone has no
+# node_modules and pi then fails to load them. Keep deps installed as part of
+# "install the thing". Skip with a note when npm is unavailable.
+node_modules: package-lock.json
+	@if command -v npm >/dev/null 2>&1; then \
+	  npm ci; \
+	else \
+	  echo "note: npm not found; run 'npm ci' after installing npm — pi extensions needing npm deps will not load."; \
+	fi
+
+install-bin: node_modules ## Install pi-memory/pi-wiki/pi-dream shims into ~/.local/bin and register the package with pi
 	@mkdir -p $(HOME)/.local/bin
 	@for cmd in memory wiki dream; do \
 	  sed 's|REPO|$(REPO)|g' deploy/bin/pi-$$cmd > $(HOME)/.local/bin/pi-$$cmd; \

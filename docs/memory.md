@@ -420,7 +420,9 @@ On the new spoke:
    make install-bin
    ```
 
-   `make install-bin` installs the `pi-memory`/`pi-wiki`/`pi-dream` shims
+   `make install-bin` installs npm dependencies (`npm ci`; several pi
+   extensions need them, and pi cannot load those extensions on a bare
+   clone), installs the `pi-memory`/`pi-wiki`/`pi-dream` shims
    under `~/.local/bin` (ensure that directory is on `PATH`) and, when `pi`
    is available, registers this checkout as a pi package so `memory_search`
    and the other extension tools exist in pi sessions. If pi is not
