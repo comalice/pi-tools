@@ -33,14 +33,16 @@ Settled in the charting grilling (rounds 1–2, 2026-11-10 session), no ticket f
 - **Spoke ingest is push.** `memory push` timer on each spoke; pi sessions shipped raw, opencode/claude via existing digest adapters.
 - **Wiki over git with real hosting.** Hub hosts the canonical remote; spokes clone/push over SSH (per-spoke keys); dossiers/staging hub-only.
 - **Per-spoke revocable tokens**, listed in hub config.
-- [memory join onboarding](06-memory-join.md): one-command spoke setup — status verify, `hub.json`, managed ssh `Host memory-hub` block, wiki clone decision paths, push timer; key enrollment stays HITL.
+- [memory join onboarding](06-memory-join.md): one-command spoke setup — status verify, `hub.json`, managed ssh `Host memory-hub` block, wiki clone decision paths, push timer; key enrollment stays HITL. **Re-evaluated against the wizard skill (2026-11):** the join command is right, but the surrounding four-stage human procedure is wizard-shaped — see ticket 10.
 - [Extension remote mode](04-extension-remote-mode.md): `hub.json` switches `memory_search`/`memory_expand` to the hub API; validated config, no silent local fallback, errors name the hub.
 - [Spoke push adapter + timer](05-spoke-push-adapter.md): `pi-memory push` with sha256 watermarks; hashed relative-path filenames; hub replaces prior snapshot on update; `make install-spoke` for spoke-side units.
 - [pi-memory-hub service](03-memory-hub-service.md): `/status` `/search` `/expand` `/ingest` behind per-spoke Bearer tokens (hub-local `memory hub-token` management only); token identity is the origin assertion; ingest serialized in-process; live on loopback with the full mint→auth→revoke lifecycle verified.
 - [Origin provenance column](01-origin-provenance.md): `entries.origin` (schema v3, hostname default), captured at ingest with explicit-option > env > hostname precedence; grok adapter threaded on rebase; unchanged sessions keep their original origin.
 - [Bind knobs on existing servers](02-bind-knobs.md): `src/shared/bind.ts` IP-literal validation, `--bind`/`PI_WIKI_BIND`/`PI_DREAM_ADMIN_BIND`, deploy via `make PI_WIKI_BIND=`, overlay ordering as documented drop-in (deployment seam exercised).
 - [Blob store + import surfaces](09-blob-store.md) (phase A landed): content-addressed blobs under `memory/blobs/<source>/<origin>/`; claude/grok are import-mode (watch-mode pi/opencode/wiki unchanged); backfill executed 2026-11-10 — roots flipped, zero sessions lost; import roots never cascade-prune; `memory forget` is the only deletion path. Phase B (hub `/import`, admin upload, extension tool) rides with ticket 03.
-- [Git hosting on the hub](07-git-hosting.md): bare repo over SSH, dedicated `git` user + `git-shell`, per-spoke keys; spokes address the hub via a `Host memory-hub` SSH alias written by `memory join` — no IPs in remotes.
+- [Git hosting on the hub](07-git-hosting.md): bare repo over SSH, dedicated `git` user + `git-shell`, per-spoke keys; spokes address the hub via a `Host memory-hub` SSH alias written by `memory join` — no IPs in remotes. Key enrollment remains HITL; ticket 10 folds it into the onboarding wizard, ordered *before* the first clone so the fail-enroll-`--force` path disappears.
+- [Spoke onboarding wizard](10-onboarding-wizard.md): committed wizard (repeatable setup path) that drives both sides over the operator's ssh+sudo — hub token mint, key enrollment, `git` user/bare repo check — then runs `memory join` and verifies. Token never copy-pasted; agent-doable steps stay CLI.
+- [hub-export / hub-init + runbook](08-hub-export-init.md): open; scope extended to deliver the migration runbook *as* a wizard (`scripts/hub-migrate.sh`) with confirmation gates around the irreversible steps.
 
 ## Not yet specified
 
@@ -50,6 +52,7 @@ Settled in the charting grilling (rounds 1–2, 2026-11-10 session), no ticket f
 - **Offline queueing guarantees** — v1 push is best-effort on timer cadence; durable spool with backoff is unspecified.
 - **Multi-address bind** — the bind knob takes one address; moving the wiki front-end to the overlay broke loopback/SSH-forward access (outage 2026-11-10). Services should accept a bind list (loopback + overlay) so human and spoke paths coexist.
 - **Claude Code as a first-class spoke source** — export path exists and rides the push adapter, but no spoke-side claude tooling is specified.
+- **Nebula enrollment automation** — wizard re-evaluation (ticket 10) confirmed adding a machine to the overlay is human-only; the wizard verifies reachability and stops with instructions. Whether anything smarter is possible (overlay DNS, enrollment tokens) is unexamined.
 
 ## Out of scope
 
