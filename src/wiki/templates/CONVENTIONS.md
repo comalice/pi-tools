@@ -59,3 +59,8 @@ Rules:
    discarded; record the decision in the git commit message.
 7. Commit curated changes to git with a message naming the pages touched and
    the staging entries consumed.
+8. **Scope machine- and path-specific claims.** Procedures, paths, and
+   deployments tied to one machine or working directory must name that
+   machine (the archive `origin`) and the folder path in the page body. The
+   librarian survey reports `origin` and `project` per citation; a page that
+   draws on multiple origins scopes each claim to its source machine.

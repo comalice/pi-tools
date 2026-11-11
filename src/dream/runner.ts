@@ -136,7 +136,7 @@ function pump() {
     session.startedAt = new Date().toISOString();
     const out = path.join(config.stateDir, "out", `${id}.json`);
     save();
-    const child = spawn(process.execPath, ["--experimental-strip-types", workerScript, "--file", session.file, "--source", session.source, "--session", id, "--project", session.project, "--model", config.model], {
+    const child = spawn(process.execPath, ["--experimental-strip-types", workerScript, "--file", session.file, "--source", session.source, "--session", id, "--project", session.project, "--model", config.model, ...(session.origin ? ["--origin", session.origin] : [])], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

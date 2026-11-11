@@ -157,7 +157,7 @@ export function validateExtractions(raw: any[], chunkIds: Set<string>): { items:
   return { items, errors };
 }
 
-export function extractionPrompt(meta: { source: string; session: string; project: string }, chunk: Chunk, chunkIndex: number, chunkCount: number, feedback?: string): string {
+export function extractionPrompt(meta: { source: string; session: string; project: string; origin?: string }, chunk: Chunk, chunkIndex: number, chunkCount: number, feedback?: string): string {
   return `You are an extraction engine. Read the transcript chunk and output ONLY a JSON array — no prose, no markdown fences — of at most ${MAX_PER_CHUNK} objects with exactly these fields:
 [{"title": "short topic title", "kind": "decision|fact|process|gotcha|ops-pattern", "tags": ["topic"], "entry_ids": ["id"], "body": "dense markdown, at most 2000 characters"}]
 
@@ -166,8 +166,9 @@ Rules:
 - Fewer is better; most chunks yield 0-2 extractions. Output [] when nothing qualifies.
 - Every claim must be supported by the entry_ids you cite. Copy entry IDs VERBATIM from the [e:...] markers; an ID you invent is a validation failure.
 - Redact secrets on sight.
+- When knowledge is specific to a machine or environment — paths, deployments, local configuration, procedures tied to one host — name the origin machine and working directory in the body.
 ${feedback ? `\nYour previous output was rejected. Fix these errors and output the corrected JSON array only:\n${feedback}\n` : ""}
-Session: ${meta.source} ${meta.session} (${meta.project}), chunk ${chunkIndex + 1}/${chunkCount}.
+Session: ${meta.source} ${meta.session} (${meta.project})${meta.origin ? `, origin ${meta.origin}` : ""}, chunk ${chunkIndex + 1}/${chunkCount}.
 Transcript:
 ${chunk.transcript}`;
 }
@@ -196,7 +197,7 @@ export const piGenerate: Generate = (model, prompt) => new Promise((resolve, rej
 
 export interface WorkerResult { staged: number; titles: string[]; chunks: number; chunkFailures: string[]; truncatedMessages: boolean }
 
-export async function runWorker(opts: { file: string; source: string; session: string; project: string; model: string; wikiDir?: string }, generate: Generate = piGenerate): Promise<WorkerResult> {
+export async function runWorker(opts: { file: string; source: string; session: string; project: string; origin?: string; model: string; wikiDir?: string }, generate: Generate = piGenerate): Promise<WorkerResult> {
   const messages = opts.source === "claude" ? digestClaude(opts.file) : opts.source === "opencode" ? digestOpenCode(opts.file, opts.session) : digestPi(opts.file);
   if (!messages.length) return { staged: 0, titles: [], chunks: 0, chunkFailures: [], truncatedMessages: false };
   const chunks = chunkMessages(messages);
@@ -213,7 +214,7 @@ export async function runWorker(opts: { file: string; source: string; session: s
     let failed = "";
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const raw = extractJsonArray(await generate(opts.model, extractionPrompt({ source: opts.source, session: opts.session, project: opts.project }, chunk, index, chunks.length, feedback)));
+        const raw = extractJsonArray(await generate(opts.model, extractionPrompt({ source: opts.source, session: opts.session, project: opts.project, origin: opts.origin }, chunk, index, chunks.length, feedback)));
         const validated = validateExtractions(raw, chunk.ids);
         if (!validated.errors.length || attempt === 1) {
           items = validated.items;
@@ -246,7 +247,7 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
     for (const required of ["--file", "--source", "--session", "--project", "--model"]) {
       if (!args[required]) throw new Error(`missing ${required}`);
     }
-    const result = await runWorker({ file: args["--file"], source: args["--source"], session: args["--session"], project: args["--project"], model: args["--model"], wikiDir: args["--wiki-dir"] });
+    const result = await runWorker({ file: args["--file"], source: args["--source"], session: args["--session"], project: args["--project"], origin: args["--origin"], model: args["--model"], wikiDir: args["--wiki-dir"] });
     process.stdout.write(`${JSON.stringify({ ok: true, ...result })}\n`);
     if (result.staged === 0 && result.chunkFailures.length === result.chunks && result.chunks > 0) process.exitCode = 1;
   } catch (error) {

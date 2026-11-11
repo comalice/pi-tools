@@ -47,6 +47,7 @@ describe("librarian survey", () => {
 
     assert.equal(bySlug["wal-checkpoint-tuning"].citations[0].status, "ok");
     assert.equal(bySlug["wal-checkpoint-tuning"].citations[0].origin, "survey-spoke");
+    assert.equal(bySlug["wal-checkpoint-tuning"].citations[0].project, "/p");
     assert.equal(bySlug["wal-checkpoint-gotchas"].citations[0].status, "broken");
     assert.match(bySlug["wal-checkpoint-gotchas"].suggestion, /discard candidate/);
     assert.equal(bySlug["spi-voltage-frequency"].citations[0].status, "unchecked");

@@ -112,6 +112,19 @@ describe("dream worker harness", () => {
     assert.deepEqual(page.meta.sources, ["pi:s1:m0"]);
     assert.ok(page.meta.tags.includes("process"));
   });
+
+  it("threads origin into the extraction prompt only when provided", async () => {
+    const directory = await tempDir();
+    const pi = path.join(directory, "s.jsonl");
+    await fs.writeFile(pi, [JSON.stringify({ type: "session", version: 3, id: "s" }), piLine("m1", "user", "hello there")].join("\n") + "\n");
+    const wikiDir = path.join(directory, "wiki");
+    const prompts: string[] = [];
+    const generate = async (_model: string, prompt: string) => { prompts.push(prompt); return "[]"; };
+    await runWorker({ file: pi, source: "pi", session: "s1", project: "/p", origin: "workbox", model: "fake", wikiDir }, generate);
+    assert.match(prompts[0], /Session: pi s1 \(\/p\), origin workbox, chunk 1\/1\./);
+    await runWorker({ file: pi, source: "pi", session: "s1", project: "/p", model: "fake", wikiDir }, generate);
+    assert.match(prompts[1], /Session: pi s1 \(\/p\), chunk 1\/1\./);
+  });
 });
 
 

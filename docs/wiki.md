@@ -13,8 +13,9 @@ different stores of trust: a wiki page asserts, the archive proves.
 - **Dream mode** (`skills/dream`, `src/dream/`) — a runner enumerates archived
   conversation sessions in a window (`memory sessions --since`) and processes
   each with a deterministic extraction harness: the session is digested into
-  ~12k-char transcript chunks, a single-turn model call per chunk returns a
-  JSON array of extractions, code validates them (verbatim entry IDs,
+  ~12k-char transcript chunks, a single-turn model call per chunk — with the
+  session's origin machine and project path in the prompt — returns a JSON
+  array of extractions, code validates them (verbatim entry IDs,
   enumerated kinds, bounded counts), and validated extractions are persisted
   to `staging/`. The model never touches tools. The runner resumes after
   interruption, retries failed sessions once, and serves a loopback admin

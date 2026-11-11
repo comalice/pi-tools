@@ -16,7 +16,7 @@ export interface SurveyEntry {
   title: string;
   tags: string[];
   sources: string[];
-  citations: { source: string; status: "ok" | "broken" | "unchecked"; origin?: string }[];
+  citations: { source: string; status: "ok" | "broken" | "unchecked"; origin?: string; project?: string }[];
   brokenCitations: number;
   parseError?: string;
   cluster: number | null;
@@ -65,19 +65,21 @@ export function runSurvey(wikiDir: string, index: string): Survey {
   const entryOrigin = db ? db.prepare("SELECT origin FROM entries WHERE source=? AND session_id=? AND entry_id=? LIMIT 1") : null;
   const sessionExists = db ? db.prepare("SELECT 1 FROM sessions WHERE source=? AND session_id=? LIMIT 1") : null;
   const sessionOrigin = db ? db.prepare("SELECT origin FROM entries WHERE source=? AND session_id=? LIMIT 1") : null;
+  const sessionProject = db ? db.prepare("SELECT project FROM sessions WHERE source=? AND session_id=? LIMIT 1") : null;
   const pageSet = new Set(existingPages);
 
-  function checkCitation(source: string): { status: "ok" | "broken" | "unchecked"; origin?: string } {
+  function checkCitation(source: string): { status: "ok" | "broken" | "unchecked"; origin?: string; project?: string } {
     const match = source.match(/^(pi|opencode|claude):([^:]+)(?::(.+))?$/);
     if (match) {
-      if (!entryOrigin || !sessionExists || !sessionOrigin) return { status: "unchecked" };
+      if (!entryOrigin || !sessionExists || !sessionOrigin || !sessionProject) return { status: "unchecked" };
+      const project = (sessionProject.get(match[1], match[2]) as any)?.project;
       if (match[3]) {
         const entry = entryOrigin.get(match[1], match[2], match[3]) as any;
-        return entry ? { status: "ok", origin: entry.origin } : { status: "broken" };
+        return entry ? { status: "ok", origin: entry.origin, ...(project ? { project } : {}) } : { status: "broken" };
       }
       if (!sessionExists.get(match[1], match[2])) return { status: "broken" };
       const origin = (sessionOrigin.get(match[1], match[2]) as any)?.origin;
-      return { status: "ok", ...(origin ? { origin } : {}) };
+      return { status: "ok", ...(origin ? { origin } : {}), ...(project ? { project } : {}) };
     }
     if (source.startsWith("wiki:")) return { status: pageSet.has(source.slice(5)) ? "ok" : "broken" };
     return { status: "unchecked" }; // doc:, web: — not verifiable here

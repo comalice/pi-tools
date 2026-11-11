@@ -46,7 +46,9 @@ front-end links to the active run automatically).
 
 4. **Single session, manually:**
    `node --experimental-strip-types <repo>/src/dream/worker.ts --file F
-   --source pi --session ID --project P --model gladiator/nemotron-3-super`
+   --source pi --session ID --project P [--origin HOST] --model gladiator/nemotron-3-super`
+   (the runner passes `--origin` automatically from the archive; manual runs
+   should too, so machine-specific extractions name their host)
 
 ## Guardrails
 

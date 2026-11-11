@@ -59,6 +59,11 @@ For each staging entry, choose exactly one disposition:
 
 The survey verifies citation *existence*; you verify citation *adequacy* for
 claims you are unsure about, using `memory_expand` or the raw session file.
+The survey also reports each citation's `origin` (machine) and `project`
+(working directory): when material is specific to a machine, path, or
+deployment — procedures, file locations, local configuration — the page must
+name that machine and folder in the body, and a page drawing on multiple
+origins scopes each claim to its source machine.
 Normalize tags toward a small controlled vocabulary (`decision`, `fact`,
 `process`, `gotcha`, `ops-pattern` plus topic tags) — staging tags are noisy.
 
