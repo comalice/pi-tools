@@ -159,7 +159,9 @@ export function createMemoryHubServer(options: MemoryHubOptions = {}): { server:
           if (input.source !== "pi") throw new HttpError(400, "Hub ingest currently supports source pi only");
           if (typeof input.filename !== "string" || input.filename.length > 255 || !input.filename.toLowerCase().endsWith(".jsonl")) throw new HttpError(400, "filename must be a .jsonl file name of at most 255 characters");
           if (typeof input.content_base64 !== "string" || !input.content_base64.length || input.content_base64.length > MAX_HTTP_BODY) throw new HttpError(400, "content_base64 must contain a Pi session payload");
-          if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.content_base64)) throw new HttpError(400, "content_base64 must be canonical standard base64");
+          // No regex validation here: a whole-body base64 regex recurses per repetition in V8 and
+          // overflows the stack on multi-megabyte payloads (field-found 2026-11-10). The decode +
+          // canonical round-trip check below rejects anything non-canonical without scanning twice.
           const bytes = Buffer.from(input.content_base64, "base64");
           if (!bytes.length || bytes.length > MAX_PI_FILE || bytes.toString("base64") !== input.content_base64) throw new HttpError(400, "Decoded Pi session must contain 1 to 268435456 bytes of canonical base64");
           return importPayload(writer, "pi", input.filename, bytes, path.join(path.dirname(index), "blobs"), { origin: spoke, replaceFilename: true });

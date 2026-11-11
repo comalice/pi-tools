@@ -163,6 +163,30 @@ describe("memory hub service", () => {
     assert.match(expansion.result.text, /hub fixture search phrase/);
   });
 
+  it("accepts multi-megabyte base64 push payloads without a stack overflow", async () => {
+    const { index, post } = await setup();
+    // Regression: hub.ts once validated content_base64 with a regex whose per-repetition
+    // recursion overflowed V8's stack at ~5 MiB of base64 (field-found, 2026-11-10). This
+    // session is ~9 MiB of JSONL across many small lines (each stays under the 4 MiB line cap).
+    const chunk = "push payload filler ".repeat(50); // ~1 KiB of text per message
+    const lines = [JSON.stringify({ type: "session", version: 3, id: "push-big", cwd: "/spoke/project" })];
+    for (let i = 0; i < 9_000; i++) lines.push(JSON.stringify({ type: "message", id: `m${i}`, parentId: i ? `m${i - 1}` : null, message: { role: "user", timestamp: "2026-02-01T12:00:00Z", content: chunk } }));
+    const big = `${lines.join("\n")}\n`;
+    const response = await post("/ingest", { source: "pi", filename: "push-big.jsonl", content_base64: Buffer.from(big).toString("base64") });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal((await response.json() as any).ok, true);
+    const db = openStore(index);
+    try {
+      assert.equal((db.prepare("SELECT COUNT(*) n FROM entries WHERE session_id='push-big'").get() as any).n, 9_000);
+    } finally { db.close(); }
+  });
+
+  it("rejects non-canonical base64 push payloads", async () => {
+    const { post } = await setup();
+    const response = await post("/ingest", { source: "pi", filename: "bad.jsonl", content_base64: "not!base64!at!all" });
+    assert.equal(response.status, 400);
+  });
+
   it("stores pushed Pi payloads under the authenticated spoke origin and serializes ingest", async () => {
     const { directory, index, post } = await setup();
     const priorOrigin = process.env.PI_MEMORY_ORIGIN;
