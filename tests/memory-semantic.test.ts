@@ -157,7 +157,11 @@ describe("semantic memory primitives", () => {
     });
     let pointCount = 0;
     const deleted: string[] = [];
+    const namespace = createHash("sha256").update(index).digest("hex").slice(0, 16);
+    const previousCollection = `memory_${namespace}_gold123_12345678`;
+    const orphanCollection = `memory_${namespace}_gkilled99_87654321`;
     const qdrant = await mockServer(async (request, response) => {
+      if (request.method === "GET" && request.url === "/collections") return json(response, { result: { collections: [{ name: previousCollection }, { name: orphanCollection }, { name: "someone_elses_collection" }] } });
       if (request.method === "GET" && request.url?.includes("gmissing")) return json(response, { error: "synthetic missing" }, 404);
       if (request.method === "GET" && request.url?.startsWith("/collections/")) return json(response, { result: { config: { params: { vectors: { size: 384, distance: "Cosine" } } } } });
       if (request.method === "PUT" && request.url?.startsWith("/collections/") && !request.url.includes("/points")) return json(response, { result: true });
@@ -176,8 +180,6 @@ describe("semantic memory primitives", () => {
     process.env.PI_MEMORY_EMBEDDER_URL = embedder;
     process.env.PI_MEMORY_QDRANT_URL = qdrant;
     try {
-    const namespace = createHash("sha256").update(index).digest("hex").slice(0, 16);
-    const previousCollection = `memory_${namespace}_gold123_12345678`;
     const sidecar = { version: 1, archive: index, collection: previousCollection, namespace, endpoints: { embedder, qdrant }, model: { model: "synthetic-model", revision, dimension: 384, max_tokens: 512 }, chunkingRevision: "chars-1400-overlap-200-v1", documentCount: 1, chunkCount: 1, builtAt: new Date().toISOString() };
     const writeSidecar = async (overrides: any) => fs.writeFile(`${index}.semantic.json`, JSON.stringify({ ...sidecar, ...overrides }), { mode: 0o600 });
 
@@ -203,7 +205,8 @@ describe("semantic memory primitives", () => {
       assert.equal(refreshed.build.documentCount, 1);
       assert.equal(refreshed.build.chunkCount, pointCount);
     }
-    assert.deepEqual(deleted, [`/collections/${previousCollection}`]);
+    assert.deepEqual(deleted.sort(), [`/collections/${orphanCollection}`, `/collections/${previousCollection}`].sort());
+    if (refreshed.refreshed) assert.deepEqual(refreshed.prunedCollections, [orphanCollection]);
     const active = JSON.parse(await fs.readFile(`${index}.semantic.json`, "utf8"));
     assert.notEqual(active.collection, previousCollection);
     assert.equal(active.documentCount, 1);

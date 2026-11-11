@@ -111,16 +111,17 @@ export async function vectorStatus(index: string, signal?: AbortSignal) {
 
 export const VECTOR_REFRESH_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export type VectorRefresh =
-  | { refreshed: true; build: Awaited<ReturnType<typeof buildVectorIndex>>; removedCollection: string | null }
+  | { refreshed: true; build: Awaited<ReturnType<typeof buildVectorIndex>>; removedCollection: string | null; prunedCollections: string[] }
   | { refreshed: false; reason: "not_configured" | "unavailable" | "current" | "recent"; warning?: string };
 
 // Conditionally rebuilds the vector index: only once a semantic sidecar exists (semantic
 // indexing stays opt-in via an explicit first vector-build), only when services answer, and
 // only when the archive document set changed since the sidecar was built and the sidecar is
 // older than maxAgeMs. A changed embedder identity or a missing/broken collection forces a
-// rebuild regardless of age. After a successful build the superseded generation recorded in
-// the previous sidecar is deleted best-effort so repeated refreshes do not accumulate
-// collections; unknown collections are never touched.
+// rebuild regardless of age. After a successful build, same-namespace collections other than
+// the new generation are deleted best-effort: the superseded generation recorded in the
+// previous sidecar, plus any orphans left behind by killed builds. Collections outside this
+// archive's namespace are never touched.
 export async function refreshVectorIndex(index: string, options: { maxAgeMs?: number } = {}, signal?: AbortSignal): Promise<VectorRefresh> {
   const maxAgeMs = options.maxAgeMs ?? VECTOR_REFRESH_MAX_AGE_MS;
   if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) throw new Error("maxAgeMs must be a positive number");
@@ -150,13 +151,26 @@ export async function refreshVectorIndex(index: string, options: { maxAgeMs?: nu
   const previous = config.collection;
   const build = await buildVectorIndex(index, signal);
   let removedCollection: string | null = null;
-  if (previous !== build.collection) {
+  const prunedCollections: string[] = [];
+  const prefix = `memory_${config.namespace}_`;
+  let listed: string[] = [];
+  try {
+    const collections = await requestJson<any>(`${config.endpoints.qdrant}/collections`, { signal });
+    if (Array.isArray(collections?.result?.collections)) listed = collections.result.collections.map((c: any) => c?.name).filter((n: any) => typeof n === "string");
+  } catch { /* Listing failed; fall back to deleting only the recorded previous generation. */ }
+  const targets = listed.length > 0
+    ? listed.filter((name) => name.startsWith(prefix) && name !== build.collection)
+    : (previous !== build.collection ? [previous] : []);
+  for (const name of targets) {
     try {
-      const removed = await requestJson<any>(`${config.endpoints.qdrant}/collections/${previous}`, { method: "DELETE", signal });
-      if (removed?.result === true) removedCollection = previous;
-    } catch { /* Orphaned generation left for manual cleanup. */ }
+      const removed = await requestJson<any>(`${config.endpoints.qdrant}/collections/${name}`, { method: "DELETE", signal });
+      if (removed?.result === true) {
+        if (name === previous) removedCollection = name;
+        else prunedCollections.push(name);
+      }
+    } catch { /* Orphaned generation left for the next successful refresh. */ }
   }
-  return { refreshed: true, build, removedCollection };
+  return { refreshed: true, build, removedCollection, prunedCollections };
 }
 
 type SearchInput = { query: string; cues?: string[]; limit?: number; project?: string; source?: string; session?: string; currentSession?: string; scope?: "project"|"all"; mode?: "lexical"|"hybrid"|"semantic"|"auto"; cosineFloor?: number };

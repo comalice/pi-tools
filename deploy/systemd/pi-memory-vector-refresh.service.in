@@ -4,5 +4,8 @@ Documentation=@REPO@/docs/memory.md
 
 [Service]
 Type=oneshot
-ExecStart=@NODE@ --experimental-strip-types @REPO@/src/memory/cli.ts vector-refresh
+# flock: a manual refresh must never run concurrently with the timer (both
+# would build and prune the same namespace). 12h max-age so a same-day
+# ingestion is vectorized at the next firing instead of waiting up to 48h.
+ExecStart=/usr/bin/flock -n /run/user/%U/pi-vector-refresh.lock @NODE@ --experimental-strip-types @REPO@/src/memory/cli.ts vector-refresh --max-age-hours 12
 Nice=10

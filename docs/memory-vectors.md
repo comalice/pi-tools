@@ -43,8 +43,11 @@ Semantic indexing is opted into by an explicit first `vector-build`; after
 that, the extension runs a debounced background `vector-refresh` chained to the
 background ingest: it rebuilds the vector index only when services answer, the
 archive document set changed since the last build, and the active sidecar is at
-least 24 hours old (override with `PI_MEMORY_VECTOR_REFRESH_HOURS` or
-`vector-refresh --max-age-hours`). A changed embedder identity or a
+least 24 hours old by default (override with `PI_MEMORY_VECTOR_REFRESH_HOURS` or
+`vector-refresh --max-age-hours`; the installed
+`pi-memory-vector-refresh.timer` fires twice daily, 04:30 and 16:30, with
+`--max-age-hours 12` under a flock so a same-day ingestion is vectorized at
+the next firing and concurrent refreshes cannot race). A changed embedder identity or a
 missing/broken collection forces a rebuild regardless of age. Refresh failure
 surfaces as a warning notification, then backs off for 6 hours; when services
 are down the refresh skips quietly.
@@ -53,8 +56,9 @@ Ingestion does not synchronize vector collections. Existing vectors are
 checked against the current SQLite document content hash when dereferenced, so
 stale/deleted vectors are ignored. Run `vector-build` (or let the background
 `vector-refresh` run) after ingest to index new or changed messages. A full
-rebuild is required; there is no incremental vector update. `vector-refresh`
-deletes exactly the superseded generation named by the previous sidecar after a
-successful rebuild — repeated refreshes do not accumulate collections; older
-generations from manual `vector-build` runs are still
-retained and removed manually only after verifying which collection is active.
+rebuild is required; there is no incremental vector update. After a
+successful rebuild, `vector-refresh` deletes every same-namespace Qdrant
+collection except the active generation — the superseded sidecar generation
+plus any orphans left by killed builds; collections outside the archive
+namespace are never touched, and manual orphan cleanup is no longer needed
+once a refresh succeeds.
