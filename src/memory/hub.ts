@@ -169,6 +169,7 @@ export function createMemoryHubServer(options: MemoryHubOptions = {}): { server:
       return send(res, 404, { ok: false, error: "Not found" });
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
+      if (status >= 500) console.error(`[memory-hub] ${req.method} ${req.url} failed:`, error);
       return send(res, status, { ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   });
