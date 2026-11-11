@@ -11,7 +11,7 @@ export function defaultHubTokenFile() {
   return path.join(agent, "memory", "hub-tokens.json");
 }
 
-function assertSpoke(spoke: string) {
+export function validateSpokeName(spoke: string) {
   if (typeof spoke !== "string" || !spoke.trim() || spoke.length > 255 || spoke.trim() !== spoke) throw new Error("spoke must contain 1 to 255 non-whitespace characters with no surrounding whitespace");
 }
 
@@ -38,7 +38,7 @@ export function readHubTokens(file = defaultHubTokenFile()): HubTokens {
   const spokes = new Set<string>();
   for (const [token, value] of Object.entries(parsed)) {
     if (!token || token.length > 256 || !value || typeof value !== "object" || Array.isArray(value) || typeof (value as any).spoke !== "string" || typeof (value as any).created !== "string" || Number.isNaN(Date.parse((value as any).created))) throw new Error("Hub token store contains an invalid token entry");
-    assertSpoke((value as any).spoke);
+    validateSpokeName((value as any).spoke);
     if (spokes.has((value as any).spoke)) throw new Error("Hub token store contains duplicate spoke identities");
     spokes.add((value as any).spoke);
     tokens[token] = { spoke: (value as any).spoke, created: (value as any).created };
@@ -66,7 +66,7 @@ function writeHubTokens(tokens: HubTokens, file = defaultHubTokenFile()) {
 }
 
 export function addHubToken(spoke: string, file = defaultHubTokenFile()) {
-  assertSpoke(spoke);
+  validateSpokeName(spoke);
   const tokens = readHubTokens(file);
   if (Object.values(tokens).some(item => item.spoke === spoke)) throw new Error(`A token already exists for spoke ${spoke}; revoke it before adding another`);
   const token = randomBytes(32).toString("base64url");
@@ -76,12 +76,30 @@ export function addHubToken(spoke: string, file = defaultHubTokenFile()) {
   return { token, spoke, created };
 }
 
+export function registerHubToken(spoke: string, token: string, file = defaultHubTokenFile()) {
+  validateSpokeName(spoke);
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token) || Buffer.from(token, "base64url").length !== 32 || Buffer.from(token, "base64url").toString("base64url") !== token) {
+    throw new Error("secret must be exactly 43 canonical base64url characters (32 bytes)");
+  }
+  const tokens = readHubTokens(file);
+  if (Object.values(tokens).some(item => item.spoke === spoke)) throw new Error(`A token already exists for spoke ${spoke}; revoke it before registering another`);
+  if (tokens[token]) throw new Error("This secret is already registered");
+  const created = new Date().toISOString();
+  tokens[token] = { spoke, created };
+  writeHubTokens(tokens, file);
+  return { spoke, created };
+}
+
+export function makeHubBundle(hub: string, token: string) {
+  return `pih1.${Buffer.from(JSON.stringify({ hub })).toString("base64url")}.${token}`;
+}
+
 export function listHubTokens(file = defaultHubTokenFile()) {
   return Object.values(readHubTokens(file)).map(({ spoke, created }) => ({ spoke, created })).sort((a, b) => a.spoke.localeCompare(b.spoke));
 }
 
 export function revokeHubToken(spoke: string, file = defaultHubTokenFile()) {
-  assertSpoke(spoke);
+  validateSpokeName(spoke);
   const tokens = readHubTokens(file);
   const token = Object.keys(tokens).find(key => tokens[key].spoke === spoke);
   if (!token) return { spoke, revoked: false };

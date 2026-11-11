@@ -6,8 +6,9 @@ import { expand, listSessions, openStore, status, SCHEMA_VERSION } from "./store
 import { ingestClaude, ingestGrok, ingestOpenCode, ingestPi, ingestWiki } from "./ingest.ts";
 import { backfillImports, forgetImport, importFiles } from "./blobs.ts";
 import { pushSessions } from "./push.ts";
-import { memoryJoin, memoryJoinStatus } from "./join.ts";
-import { addHubToken, listHubTokens, revokeHubToken } from "./hub-tokens.ts";
+import { hubOrigin, memoryEnroll, memoryJoin, memoryJoinStatus, parseHubBundle, validateHubUrl } from "./join.ts";
+import { addHubToken, listHubTokens, makeHubBundle, registerHubToken, revokeHubToken } from "./hub-tokens.ts";
+import { defaultHubGitRoot, initializeHubGit } from "./git-http.ts";
 import { buildVectorIndex, refreshVectorIndex, searchMemory, vectorStatus } from "./semantic.ts";
 import { embedTexts, health, serviceUrls } from "./vector-client.ts";
 import { evaluateCases, readEvaluationCases } from "./evaluation.ts";
@@ -121,8 +122,8 @@ process.once("SIGTERM", () => operation.abort(new Error("Memory operation cancel
 try {
   const { command, out, args } = parseArgs(process.argv.slice(2));
   const paths = defaults(out);
-  if (!command) throw new Error("Usage: memory <ingest|import|forget|push|hub-token|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
-  if (command !== "import" && command !== "hub-token" && command !== "join" && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+  if (!command) throw new Error("Usage: memory <ingest|import|forget|push|join|enroll|hub-token|hub-git-init|status|sessions|search|expand|vector-build|vector-refresh|vector-status|entity-scan|entity-dossier|session-summaries|benchmark|evaluate> [flags]");
+  if (command !== "import" && command !== "hub-token" && command !== "join" && command !== "enroll" && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
   const blobDirectory = path.join(path.dirname(paths.index), "blobs");
 
   if (command === "join") {
@@ -133,33 +134,66 @@ try {
       emit(result);
       if (!result.ok) process.exitCode = 1;
     } else {
-      if (args.length !== 1) throw new Error("Usage: memory join <hub-host> [--port 6342] (--token <spoke-token>|--token-stdin) [--force] [--no-push]");
-      const port = positiveInt(value(out, "--port"), "port", 6342, 1, 65535);
-      const tokenArg = value(out, "--token");
-      const tokenFromStdin = Boolean(out["--token-stdin"]);
-      if (Boolean(tokenArg) === tokenFromStdin) throw new Error("memory join requires exactly one of --token <spoke-token> or --token-stdin");
-      const token = tokenFromStdin ? await readStdinToken() : tokenArg!;
-      const result = await memoryJoin({ host: args[0], port, token, force: Boolean(out["--force"]), noPush: Boolean(out["--no-push"]) });
-      emit(result);
+      if (args.length !== 1) throw new Error("Usage: memory join <hub-host|bundle> [--port 6342] (--token <spoke-token>|--token-stdin) [--force] [--no-push]");
+      const bundle = args[0].startsWith("pih1.") ? parseHubBundle(args[0]) : undefined;
+      let hub: string;
+      let token: string;
+      if (bundle) {
+        if (value(out, "--port") !== undefined || value(out, "--token") !== undefined || out["--token-stdin"]) throw new Error("A pih1 bundle already contains its hub address and token; do not pass --port or token flags");
+        hub = bundle.hub;
+        token = bundle.token;
+      } else {
+        const { hub: origin } = hubOrigin(args[0], positiveInt(value(out, "--port"), "port", 6342, 1, 65535));
+        const tokenArg = value(out, "--token");
+        const tokenFromStdin = Boolean(out["--token-stdin"]);
+        if (Boolean(tokenArg) === tokenFromStdin) throw new Error("memory join requires exactly one of --token <spoke-token> or --token-stdin");
+        hub = origin;
+        token = tokenFromStdin ? await readStdinToken() : tokenArg!;
+      }
+      emit(await memoryJoin({ hub, token, force: Boolean(out["--force"]), noPush: Boolean(out["--no-push"]) }));
     }
+  } else if (command === "enroll") {
+    only(out, ["--port", "--spoke", "--no-push"]);
+    if (args.length !== 1) throw new Error("Usage: memory enroll <hub-host> [--port 6342] [--spoke <name>] [--no-push]");
+    const { hub } = hubOrigin(args[0], positiveInt(value(out, "--port"), "port", 6342, 1, 65535));
+    const enroll = await memoryEnroll({
+      hub,
+      spoke: value(out, "--spoke"),
+      noPush: Boolean(out["--no-push"]),
+      signal: operation.signal,
+      onRegisterCommand: command => process.stdout.write(`On the hub, run exactly:\n${command}\n`),
+    });
+    emit(enroll);
   } else if (command === "push") {
     only(out, []);
     const push = await pushSessions({ agentDir: process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), sessionsDir: paths.pi });
     emit({ ok: push.failed === 0, push });
     if (push.failed) process.exitCode = 1;
   } else if (command === "hub-token") {
-    only(out, []);
-    const [action, spoke, extra] = args;
-    if (action === "add" && spoke && !extra) {
-      const token = addHubToken(spoke);
-      emit({ ok: true, ...token });
-    } else if (action === "list" && args.length === 1) {
+    only(out, ["--advertise"]);
+    const [action, spoke, secret, extra] = args;
+    if (action === "add" && spoke && !secret && !extra) {
+      const bind = process.env.PI_HUB_BIND || "127.0.0.1";
+      const bindHost = bind.includes(":") && !bind.startsWith("[") ? `[${bind}]` : bind;
+      const advertisedInput = value(out, "--advertise") ?? `http://${bindHost}:${positiveInt(process.env.PI_HUB_PORT, "PI_HUB_PORT", 6342, 1, 65535)}`;
+      const advertised = validateHubUrl(advertisedInput);
+      const minted = addHubToken(spoke);
+      const host = new URL(advertised).hostname.replace(/^\[|\]$/g, "");
+      if (host === "localhost" || host === "::1" || host.startsWith("127.")) process.stderr.write("Warning: bundle is only useful on the hub itself (advertised address is loopback).\n");
+      emit({ ok: true, ...minted, bundle: makeHubBundle(advertised, minted.token) });
+    } else if (action === "register" && spoke && secret && !extra && !value(out, "--advertise")) {
+      emit({ ok: true, ...registerHubToken(spoke, secret) });
+    } else if (action === "list" && args.length === 1 && !value(out, "--advertise")) {
       emit({ ok: true, tokens: listHubTokens() });
-    } else if (action === "revoke" && spoke && !extra) {
+    } else if (action === "revoke" && spoke && !secret && !extra && !value(out, "--advertise")) {
       emit({ ok: true, ...revokeHubToken(spoke) });
     } else {
-      throw new Error("Usage: memory hub-token <add SPOKE|list|revoke SPOKE>");
+      throw new Error("Usage: memory hub-token <add SPOKE [--advertise http://host:port]|register SPOKE SECRET|list|revoke SPOKE>");
     }
+  } else if (command === "hub-git-init") {
+    only(out, []);
+    if (args.length) throw new Error("Usage: memory hub-git-init");
+    emit({ ok: true, ...initializeHubGit(defaultHubGitRoot(), paths.wiki) });
   } else if (command === "ingest") {
     only(out, ["--index", "--pi-sessions", "--opencode-db", "--wiki-dir", "--claude-exports", "--grok-exports"]);
     safeIndexLocation(paths.index, paths.pi, paths.opencode);
