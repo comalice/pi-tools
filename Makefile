@@ -43,13 +43,23 @@ test: ## Full test suite
 $(SYSTEMD_USER_DIR):
 	mkdir -p $(SYSTEMD_USER_DIR)
 
-install-bin: ## Install pi-memory/pi-wiki/pi-dream shims into ~/.local/bin
+install-bin: ## Install pi-memory/pi-wiki/pi-dream shims into ~/.local/bin and register the package with pi
 	@mkdir -p $(HOME)/.local/bin
 	@for cmd in memory wiki dream; do \
 	  sed 's|REPO|$(REPO)|g' deploy/bin/pi-$$cmd > $(HOME)/.local/bin/pi-$$cmd; \
 	  chmod +x $(HOME)/.local/bin/pi-$$cmd; \
 	  echo "installed $(HOME)/.local/bin/pi-$$cmd"; \
 	done
+	@if command -v pi >/dev/null 2>&1; then \
+	  if pi list 2>/dev/null | grep -qF "$(CURDIR)"; then \
+	    echo "pi package already registered for $(CURDIR)"; \
+	  else \
+	    pi install "$(CURDIR)" && echo "registered $(CURDIR) as a pi package"; \
+	  fi; \
+	else \
+	  echo "note: pi not found on PATH; skipping pi package registration."; \
+	  echo "      install pi and run: pi install $(CURDIR)"; \
+	fi
 
 install-systemd: $(SYSTEMD_USER_DIR) ## Install and enable user systemd units
 	@for unit in $(UNITS); do \

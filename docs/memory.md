@@ -420,8 +420,14 @@ On the new spoke:
    make install-bin
    ```
 
-   `make install-bin` installs under `~/.local/bin`; ensure that directory is
-   on `PATH` or invoke `~/.local/bin/pi-memory` directly.
+   `make install-bin` installs the `pi-memory`/`pi-wiki`/`pi-dream` shims
+   under `~/.local/bin` (ensure that directory is on `PATH`) and, when `pi`
+   is available, registers this checkout as a pi package so `memory_search`
+   and the other extension tools exist in pi sessions. If pi is not
+   installed yet it prints a skip note; run `pi install <checkout>` after
+   installing pi. Re-running is safe: an already-registered checkout is
+   left alone, and a registration pointing at a moved or deleted checkout
+   is reported rather than rewritten.
 
 2. Enroll against the hub's private-network IP. The command generates a
    32-byte secret locally and prints one command containing it exactly once:
