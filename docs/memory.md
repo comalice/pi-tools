@@ -416,15 +416,16 @@ switching keys, remove this spoke's corresponding public-key line there; it
 grants wiki Git access independently of the hub token. A failed
 `pi-memory join` can leave `hub.json` behind if its API check succeeded but a
 later SSH/wiki/timer step failed. Inspect `pi-memory join --status` and the
-wiki/SSH state before retrying; once the cause is fixed, rerun `pi-memory join`
-with `--force` to back up and replace that partial hub configuration. The
-stored token can be passed without printing it by reading it from
-`hub.json`. Set `HUB_HOST` and `HUB_PORT` to the same values used for the
-join, then pass the stored token without printing it:
+wiki/SSH state before retrying; once the cause is fixed, rerun the wizard with
+the same hub address and port. It reuses a matching hub config and runs join
+with `--force` to back up and replace that partial configuration. For manual
+recovery, read the stored token from `hub.json` and pass it through stdin rather
+than putting it on the command line. Set `HUB_HOST` and `HUB_PORT` to the same
+values used for the join:
 
 ```sh
 hub_token=$(node -e 'const fs=require("node:fs");const agent=process.env.PI_CODING_AGENT_DIR||`${process.env.HOME}/.pi/agent`;process.stdout.write(JSON.parse(fs.readFileSync(`${agent}/memory/hub.json`, "utf8")).token)')
-pi-memory join "$HUB_HOST" --port "$HUB_PORT" --token "$hub_token" --force
+printf '%s' "$hub_token" | pi-memory join "$HUB_HOST" --port "$HUB_PORT" --token-stdin --force
 unset hub_token HUB_HOST HUB_PORT
 ```
 
@@ -460,7 +461,10 @@ port through the `memory-hub` alias:
 ```sh
 ssh-keygen -t ed25519 -C "$(hostname)" -f ~/.ssh/id_ed25519 -N "" # only if absent
 cat ~/.ssh/id_ed25519.pub # transfer this public key only, securely
-pi-memory join 100.64.0.12 --port 6342 --token '<spoke-token>'
+read -rsp 'Spoke token: ' spoke_token
+printf '\n'
+printf '%s' "$spoke_token" | pi-memory join 100.64.0.12 --port 6342 --token-stdin
+unset spoke_token
 ```
 
 If the spoke has no working `systemctl --user` manager, add `--no-push` to

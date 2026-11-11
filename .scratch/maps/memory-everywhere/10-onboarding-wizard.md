@@ -24,12 +24,13 @@ Implemented `scripts/spoke-onboard.sh` as a five-stage wizard using the
 `skills/wizard/template.sh` library unchanged through `run_wizard()`. It checks
 overlay/SSH and spoke prerequisites, prepares the hub over SSH with confirmation
 gates, captures the hub-minted token silently, enrolls the public SSH key before
-first join, invokes `pi-memory join`, then verifies status, push, and Git access.
-Pre-join aborts automatically revoke the just-minted token where possible;
-partial joins retain it only when it is already present in `hub.json`. The docs
-lead with the wizard and retain an ordered manual fallback.
+first join, invokes `pi-memory join` with the token streamed on stdin, then
+verifies status, push, and Git access. Pre-join aborts automatically revoke the
+just-minted token where possible; matching partial hub configs are reused on
+rerun with `--force`. The docs lead with the wizard and retain an ordered manual
+fallback.
 
 Validation: `bash -n scripts/spoke-onboard.sh` passed; `shellcheck` was not
-installed; `npm test` passed (160 tests, including static wizard syntax,
-template-library byte identity, and five-stage count/order). The wizard was not
-run end-to-end because it requires an operator and a live hub.
+installed; final `npm test` passed (160 tests), including the stdin-token join
+and wizard structure checks. The wizard was not run end-to-end because it
+requires an operator and a live hub.
