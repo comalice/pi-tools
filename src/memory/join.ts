@@ -143,11 +143,11 @@ function commandOk(runner: CommandRunner, command: string, args: string[], cwd?:
 function authFailure(message: string, sshDir: string) {
   const key = ["id_ed25519.pub", "id_rsa.pub"].map(name => path.join(sshDir, name)).find(filename => existsSync(filename));
   const pubkey = key ? `Public key to enroll: ${key}.` : `No default public key was found. Generate one first with: ssh-keygen -t ed25519 -C "$(hostname)".`;
-  return new Error(`SSH authentication to the hub wiki failed. ${pubkey} The operator must append that public key as one line to /home/git/.ssh/authorized_keys on the hub (one line per spoke, comment = spoke hostname). Do this manually; this command will not use sudo. Git said: ${message.trim()}`);
+  return new Error(`SSH authentication to the hub wiki failed. ${pubkey} The operator must append that public key as one line to /home/wikigit/.ssh/authorized_keys on the hub (one line per spoke, comment = spoke hostname). Do this manually; this command will not use sudo. Git said: ${message.trim()}`);
 }
 
 export function ensureWikiClone(wikiDir: string, runner: CommandRunner = runCommand, sshDir = path.join(os.homedir(), ".ssh")) {
-  const remote = "git@memory-hub:wiki.git";
+  const remote = "wikigit@memory-hub:wiki.git";
   let exists = false;
   try { lstatSync(wikiDir); exists = true; } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

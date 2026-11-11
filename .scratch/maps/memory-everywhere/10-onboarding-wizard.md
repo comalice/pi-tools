@@ -41,3 +41,9 @@ abort), hub CLI JSON shapes, and docs verified against `src/memory/`.
 **Remaining gate:** run the wizard for real on a second machine (requires a
 live hub + operator); close the ticket when that succeeds. Also confirm the
 `join --status` reuse path against a real partial `hub.json` during that run.
+
+Repair (2026-11, pre-live-run): the hub-side stage would have died on its own
+check — the hub already has a `git` user (home `/`, from the transitional
+Forgejo install), while the wizard expected to create one with home
+`/home/git`. Hosting account renamed to `wikigit` throughout (wizard,
+`join`, docs, tests; ticket 07 amended). `npm test` green after the rename.

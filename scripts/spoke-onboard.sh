@@ -265,42 +265,42 @@ if [[ "$REUSE_HUB_CONFIG" == 1 ]]; then
 fi
 
 stage "Hub-side preparation"
-say "Check the dedicated git account and /home/git/wiki.git; missing or incorrect setup is changed only after confirmation."
+say "Check the dedicated wikigit account and /home/wikigit/wiki.git; missing or incorrect setup is changed only after confirmation."
 HUB_REPO=""
 ask HUB_REPO "Absolute path to the dirac-pi-tools checkout on the hub (contains package.json):" || die "No hub repository path was entered."
 [[ "$HUB_REPO" == /* && "$HUB_REPO" != *$'\n'* ]] || die "Enter the absolute path to the dirac-pi-tools checkout on the hub."
 GIT_SHELL=$(ssh "$HUB_ADDRESS" 'command -v git-shell') || die "Could not locate git-shell on the hub. Install git-shell and rerun."
 [[ "$GIT_SHELL" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "Hub returned an unexpected git-shell path; inspect it manually: $GIT_SHELL"
-GIT_ENTRY=$(ssh "$HUB_ADDRESS" 'getent passwd git || true') || die "Could not inspect the git account on the hub."
+GIT_ENTRY=$(ssh "$HUB_ADDRESS" 'getent passwd wikigit || true') || die "Could not inspect the wikigit account on the hub."
 if [[ -z "$GIT_ENTRY" ]]; then
-  say "The git account is missing; it will be created with git-shell and home /home/git."
-  confirm "Create the dedicated git user on the hub using sudo?" || die "Stopped before creating the hub git user."
-  ssh -tt "$HUB_ADDRESS" "sudo useradd --create-home --home-dir /home/git --shell '$GIT_SHELL' git" || die "Could not create the hub git account."
+  say "The wikigit account is missing; it will be created with git-shell and home /home/wikigit."
+  confirm "Create the dedicated wikigit user on the hub using sudo?" || die "Stopped before creating the hub git user."
+  ssh -tt "$HUB_ADDRESS" "sudo useradd --create-home --home-dir /home/wikigit --shell '$GIT_SHELL' wikigit" || die "Could not create the hub wikigit account."
   GIT_ENTRY=$(ssh "$HUB_ADDRESS" 'getent passwd git') || die "Could not verify the newly created git account."
 fi
 IFS=: read -r _ _ _ _ _ GIT_HOME GIT_ACCOUNT_SHELL <<< "$GIT_ENTRY"
-[[ "$GIT_HOME" == /home/git ]] || die "The hub git account's home is $GIT_HOME, not /home/git. Resolve this manually before onboarding."
+[[ "$GIT_HOME" == /home/wikigit ]] || die "The hub wikigit account's home is $GIT_HOME, not /home/wikigit. Resolve this manually before onboarding."
 if [[ "$GIT_ACCOUNT_SHELL" != "$GIT_SHELL" ]]; then
-  say "The git account uses $GIT_ACCOUNT_SHELL; required shell is $GIT_SHELL."
-  confirm "Change the git account shell to git-shell using sudo?" || die "Stopped before changing the hub git account shell."
-  ssh -tt "$HUB_ADDRESS" "sudo usermod --shell '$GIT_SHELL' git" || die "Could not set git-shell for the hub git account."
+  say "The wikigit account uses $GIT_ACCOUNT_SHELL; required shell is $GIT_SHELL."
+  confirm "Change the git account shell to git-shell using sudo?" || die "Stopped before changing the hub wikigit account shell."
+  ssh -tt "$HUB_ADDRESS" "sudo usermod --shell '$GIT_SHELL' wikigit" || die "Could not set git-shell for the hub wikigit account."
 fi
-say "Dedicated git account is configured with git-shell."
-REPO_STATE=$(ssh "$HUB_ADDRESS" 'if [ ! -e /home/git/wiki.git ]; then printf missing; elif [ "$(git -C /home/git/wiki.git rev-parse --is-bare-repository 2>/dev/null)" = true ]; then printf bare; else printf invalid; fi') || die "Could not inspect /home/git/wiki.git on the hub."
+say "Dedicated wikigit account is configured with git-shell."
+REPO_STATE=$(ssh "$HUB_ADDRESS" 'if [ ! -e /home/wikigit/wiki.git ]; then printf missing; elif [ "$(git -C /home/wikigit/wiki.git rev-parse --is-bare-repository 2>/dev/null)" = true ]; then printf bare; else printf invalid; fi') || die "Could not inspect /home/wikigit/wiki.git on the hub."
 if [[ "$REPO_STATE" == missing ]]; then
   say "The canonical bare repository is missing."
-  confirm "Create /home/git/wiki.git as a bare repository using sudo?" || die "Stopped before creating the hub wiki repository."
-  ssh -tt "$HUB_ADDRESS" 'sudo -u git git init --bare /home/git/wiki.git' || die "Could not create /home/git/wiki.git."
-  REPO_STATE=$(ssh "$HUB_ADDRESS" 'git -C /home/git/wiki.git rev-parse --is-bare-repository 2>/dev/null') || die "Could not verify the newly created /home/git/wiki.git."
-  [[ "$REPO_STATE" == true ]] || die "/home/git/wiki.git was created but is not a valid bare repository. Inspect it manually."
-  REPO_OWNER=$(ssh "$HUB_ADDRESS" 'stat -c %U /home/git/wiki.git') || die "Could not inspect ownership of /home/git/wiki.git."
-  [[ "$REPO_OWNER" == git ]] || die "/home/git/wiki.git was created but is owned by $REPO_OWNER, not git. Resolve ownership manually."
+  confirm "Create /home/wikigit/wiki.git as a bare repository using sudo?" || die "Stopped before creating the hub wiki repository."
+  ssh -tt "$HUB_ADDRESS" 'sudo -u wikigit git init --bare /home/wikigit/wiki.git' || die "Could not create /home/wikigit/wiki.git."
+  REPO_STATE=$(ssh "$HUB_ADDRESS" 'git -C /home/wikigit/wiki.git rev-parse --is-bare-repository 2>/dev/null') || die "Could not verify the newly created /home/wikigit/wiki.git."
+  [[ "$REPO_STATE" == true ]] || die "/home/wikigit/wiki.git was created but is not a valid bare repository. Inspect it manually."
+  REPO_OWNER=$(ssh "$HUB_ADDRESS" 'stat -c %U /home/wikigit/wiki.git') || die "Could not inspect ownership of /home/wikigit/wiki.git."
+  [[ "$REPO_OWNER" == wikigit ]] || die "/home/wikigit/wiki.git was created but is owned by $REPO_OWNER, not wikigit. Resolve ownership manually."
 elif [[ "$REPO_STATE" == bare ]]; then
-  REPO_OWNER=$(ssh "$HUB_ADDRESS" 'stat -c %U /home/git/wiki.git') || die "Could not inspect ownership of /home/git/wiki.git."
-  [[ "$REPO_OWNER" == git ]] || die "/home/git/wiki.git is bare but owned by $REPO_OWNER, not git. Resolve ownership manually before onboarding."
-  say "Canonical bare repository exists and is owned by git."
+  REPO_OWNER=$(ssh "$HUB_ADDRESS" 'stat -c %U /home/wikigit/wiki.git') || die "Could not inspect ownership of /home/wikigit/wiki.git."
+  [[ "$REPO_OWNER" == wikigit ]] || die "/home/wikigit/wiki.git is bare but owned by $REPO_OWNER, not wikigit. Resolve ownership manually before onboarding."
+  say "Canonical bare repository exists and is owned by wikigit."
 else
-  die "/home/git/wiki.git exists but is not a valid bare repository. Inspect it manually; the wizard will not replace it."
+  die "/home/wikigit/wiki.git exists but is not a valid bare repository. Inspect it manually; the wizard will not replace it."
 fi
 
 HUB_REPO_B64=$(printf '%s' "$HUB_REPO" | base64 | tr -d '\r\n')
@@ -361,8 +361,8 @@ KEY_FIELDS=$(awk 'NF >= 2 { print $1, $2; exit }' "$PUBLIC_KEY")
 PUBKEY_LINE="$KEY_FIELDS $SPOKE_NAME"
 PUBKEY_B64=$(printf '%s' "$PUBKEY_LINE" | base64 | tr -d '\r\n')
 say "Enrolling the public key on the hub (comment: $SPOKE_NAME). Private key remains on this spoke and is never printed."
-confirm "Append this spoke's public key to /home/git/.ssh/authorized_keys on the hub using sudo?" || die "Stopped before enrolling the spoke SSH key."
-REMOTE_KEY_SCRIPT='set -euo pipefail; key=$(printf "%s" "$1" | base64 -d); [[ ! -L /home/git/.ssh ]] || exit 1; install -d -o git -g git -m 700 /home/git/.ssh; [[ ! -L /home/git/.ssh/authorized_keys ]] || exit 1; [[ ! -e /home/git/.ssh/authorized_keys || -f /home/git/.ssh/authorized_keys ]] || exit 1; touch /home/git/.ssh/authorized_keys; chown git:git /home/git/.ssh/authorized_keys; chmod 600 /home/git/.ssh/authorized_keys; if grep -Fxq -- "$key" /home/git/.ssh/authorized_keys; then printf "Public key already enrolled.\\n"; else printf "%s\\n" "$key" >> /home/git/.ssh/authorized_keys; printf "Public key enrolled.\\n"; fi'
+confirm "Append this spoke's public key to /home/wikigit/.ssh/authorized_keys on the hub using sudo?" || die "Stopped before enrolling the spoke SSH key."
+REMOTE_KEY_SCRIPT='set -euo pipefail; key=$(printf "%s" "$1" | base64 -d); [[ ! -L /home/wikigit/.ssh ]] || exit 1; install -d -o wikigit -g wikigit -m 700 /home/wikigit/.ssh; [[ ! -L /home/wikigit/.ssh/authorized_keys ]] || exit 1; [[ ! -e /home/wikigit/.ssh/authorized_keys || -f /home/wikigit/.ssh/authorized_keys ]] || exit 1; touch /home/wikigit/.ssh/authorized_keys; chown wikigit:wikigit /home/wikigit/.ssh/authorized_keys; chmod 600 /home/wikigit/.ssh/authorized_keys; if grep -Fxq -- "$key" /home/wikigit/.ssh/authorized_keys; then printf "Public key already enrolled.\\n"; else printf "%s\\n" "$key" >> /home/wikigit/.ssh/authorized_keys; printf "Public key enrolled.\\n"; fi'
 printf -v REMOTE_KEY_COMMAND 'sudo bash -c %q -- %q' "$REMOTE_KEY_SCRIPT" "$PUBKEY_B64"
 ssh -tt "$HUB_ADDRESS" "$REMOTE_KEY_COMMAND" || die "Could not enroll the public key on the hub. The unjoined token will be revoked automatically; check whether the key was appended before rerunning."
 unset PUBKEY_B64 REMOTE_KEY_SCRIPT REMOTE_KEY_COMMAND PUBKEY_LINE KEY_FIELDS

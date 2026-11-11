@@ -391,11 +391,11 @@ checkout first; it installs under `~/.local/bin`, which must also be on
 `PATH`. The user manager is required because `join` installs the push timer.
 Without one, use the manual fallback with `pi-memory join --no-push` and run
 `pi-memory push` manually. The hub must already have a working wiki clone
-whose `origin` is `/home/git/wiki.git`, so librarian commits can reach the bare
+whose `origin` is `/home/wikigit/wiki.git`, so librarian commits can reach the bare
 repository; the wizard checks/creates the bare repo but does not configure the
 hub clone. The wizard checks overlay reachability, asks for the hub repository
-checkout path, checks or (after confirmation) creates the `git`/`git-shell`
-account and `/home/git/wiki.git`, mints the spoke token on the hub without
+checkout path, checks or (after confirmation) creates the `wikigit`/`git-shell`
+account and `/home/wikigit/wiki.git`, mints the spoke token on the hub without
 displaying it, enrolls the spoke's public ed25519 key before joining, then
 runs `pi-memory join`, `pi-memory join --status`, `pi-memory push`, and
 `git ls-remote` verification. If it must generate a key, it creates an
@@ -410,7 +410,7 @@ Nebula enrollment remains human-only. If the hub is not reachable, enroll this
 spoke through the deployment's Nebula procedure, install its assigned
 configuration and credentials, start Nebula, confirm that it has an overlay
 address, and rerun the wizard. The wizard does not create or transfer Nebula
-credentials. The hub-side SSH key remains in `/home/git/.ssh/authorized_keys`
+credentials. The hub-side SSH key remains in `/home/wikigit/.ssh/authorized_keys`
 even if a later stage fails or onboarding is abandoned. If abandoning setup or
 switching keys, remove this spoke's corresponding public-key line there; it
 grants wiki Git access independently of the hub token. A failed
@@ -435,8 +435,8 @@ For a manual setup or recovery, use the fallback procedure below.
 
 The hub API token and SSH Git key are separate credentials: the token
 authenticates HTTP memory requests, while the per-machine SSH key authenticates
-wiki Git access. Prepare the hub first. It needs the dedicated `git` account
-with `git-shell`, the canonical bare repository at `/home/git/wiki.git`, and a
+wiki Git access. Prepare the hub first. It needs the dedicated `wikigit` account
+with `git-shell`, the canonical bare repository at `/home/wikigit/wiki.git`, and a
 working wiki clone whose `origin` is that repository so librarian commits can
 be pushed. SSH and the hub API must be reachable from spokes over the trusted
 private network (normally Nebula); keep the plain-HTTP API off untrusted
@@ -451,7 +451,7 @@ npm run memory -- hub-token add laptop.example
 
 Before the first join, generate the default SSH keypair if it does not exist
 and have a hub administrator enroll only the public-key line in
-`/home/git/.ssh/authorized_keys`, one key per spoke, with the comment set to
+`/home/wikigit/.ssh/authorized_keys`, one key per spoke, with the comment set to
 the spoke hostname. Never transfer the private key.
 
 Then join from the spoke using the hub's Nebula IP or resolvable hostname
@@ -475,7 +475,7 @@ Enrolling the key before this first join avoids a failed wiki clone and the
 need to rerun with `--force`. The command verifies authenticated `GET /status`
 and the spoke identity, writes private
 `~/.pi/agent/memory/hub.json` (mode 0600), updates its managed SSH block, clones
-`git@memory-hub:wiki.git` into `~/.pi/agent/wiki`, and installs the push timer.
+`wikigit@memory-hub:wiki.git` into `~/.pi/agent/wiki`, and installs the push timer.
 An existing wiki checkout with that exact origin is fetched and
 fast-forwarded; a checkout with another origin is left untouched and reported.
 An existing `hub.json` is never replaced implicitly. Use `--force` only when
@@ -487,7 +487,7 @@ Verify API access and identity, test a push, and check the SSH Git connection:
 ```sh
 pi-memory join --status
 pi-memory push
-git ls-remote git@memory-hub:wiki.git
+git ls-remote wikigit@memory-hub:wiki.git
 ```
 
 The normal join enables `pi-memory-push.timer` to push local Pi sessions every

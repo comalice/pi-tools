@@ -104,12 +104,12 @@ describe("memory join setup helpers", () => {
     const calls: string[][] = [];
     const cloneRunner: CommandRunner = (_command, args) => { calls.push(args); return result(); };
     assert.deepEqual(ensureWikiClone(wiki, cloneRunner), { action: "cloned", directory: wiki });
-    assert.deepEqual(calls[0], ["clone", "git@memory-hub:wiki.git", wiki]);
+    assert.deepEqual(calls[0], ["clone", "wikigit@memory-hub:wiki.git", wiki]);
 
     await fs.mkdir(wiki);
     const currentRunner: CommandRunner = (_command, args) => {
       calls.push(args);
-      if (args[0] === "remote") return result(0, "git@memory-hub:wiki.git\n");
+      if (args[0] === "remote") return result(0, "wikigit@memory-hub:wiki.git\n");
       return result();
     };
     assert.deepEqual(ensureWikiClone(wiki, currentRunner), { action: "updated", directory: wiki });
@@ -123,7 +123,7 @@ describe("memory join setup helpers", () => {
     const directory = await temporary();
     const wiki = path.join(directory, "wiki");
     const runner: CommandRunner = () => result(128, "", "git@memory-hub: Permission denied (publickey).");
-    assert.throws(() => ensureWikiClone(wiki, runner, path.join(directory, ".ssh")), /ssh-keygen.*\/home\/git\/\.ssh\/authorized_keys.*one line per spoke/s);
+    assert.throws(() => ensureWikiClone(wiki, runner, path.join(directory, ".ssh")), /ssh-keygen.*\/home\/wikigit\/\.ssh\/authorized_keys.*one line per spoke/s);
   });
 
   it("verifies and reports identity from a real hub status endpoint", async () => {
