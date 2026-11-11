@@ -377,90 +377,120 @@ responses. The endpoints are:
 
 ### Spoke onboarding
 
-Onboarding has four stages. The hub API and SSH Git hosting are separate:
-the spoke token authenticates HTTP memory requests, while a per-machine SSH
-key authenticates wiki Git access. `memory join` never creates accounts, edits
-hub files, runs sudo, or enrolls a key for you.
+For normal onboarding, run the wizard on the new spoke from the repository
+root:
 
-#### 1. Prepare the hub
+```sh
+./scripts/spoke-onboard.sh
+```
 
-On the hub, provision the dedicated `git` account with `git-shell` as its
-login shell and create the canonical bare repository at
-`/home/git/wiki.git`. The hub's working wiki clone should use that bare repo as
-its `origin`, so librarian commits can be pushed there. SSH must be reachable
-from spokes over the trusted private network (normally Nebula). Configure
-`pi-memory-hub` to listen on an address reachable on that network, not just
-loopback, while keeping the plain-HTTP API off untrusted networks.
+The wizard needs `pi-memory` on `PATH`, `make`, a working `systemctl --user`
+manager, and SSH access to the hub account with sudo permission for the hub-side
+setup. If the command is not installed, run `make install-bin` from this
+checkout first; it installs under `~/.local/bin`, which must also be on
+`PATH`. The user manager is required because `join` installs the push timer.
+Without one, use the manual fallback with `pi-memory join --no-push` and run
+`pi-memory push` manually. The hub must already have a working wiki clone
+whose `origin` is `/home/git/wiki.git`, so librarian commits can reach the bare
+repository; the wizard checks/creates the bare repo but does not configure the
+hub clone. The wizard checks overlay reachability, asks for the hub repository
+checkout path, checks or (after confirmation) creates the `git`/`git-shell`
+account and `/home/git/wiki.git`, mints the spoke token on the hub without
+displaying it, enrolls the spoke's public ed25519 key before joining, then
+runs `pi-memory join`, `pi-memory join --status`, `pi-memory push`, and
+`git ls-remote` verification. If it must generate a key, it creates an
+unencrypted ed25519 private key (empty passphrase); protect the spoke account
+and device accordingly, or prepare a suitable existing default key and SSH
+agent before onboarding. The private SSH key never leaves the spoke. `join`
+writes `hub.json` with mode 0600, updates only its managed `Host memory-hub`
+SSH block, clones the wiki, and installs the spoke push timer via
+`make install-spoke`; the wizard does not repeat those operations itself.
 
-Create one API token for the intended spoke on the hub and copy its output
-securely; it is shown only when created:
+Nebula enrollment remains human-only. If the hub is not reachable, enroll this
+spoke through the deployment's Nebula procedure, install its assigned
+configuration and credentials, start Nebula, confirm that it has an overlay
+address, and rerun the wizard. The wizard does not create or transfer Nebula
+credentials. The hub-side SSH key remains in `/home/git/.ssh/authorized_keys`
+even if a later stage fails or onboarding is abandoned. If abandoning setup or
+switching keys, remove this spoke's corresponding public-key line there; it
+grants wiki Git access independently of the hub token. A failed
+`pi-memory join` can leave `hub.json` behind if its API check succeeded but a
+later SSH/wiki/timer step failed. Inspect `pi-memory join --status` and the
+wiki/SSH state before retrying; once the cause is fixed, rerun `pi-memory join`
+with `--force` to back up and replace that partial hub configuration. The
+stored token can be passed without printing it by reading it from
+`hub.json`. Set `HUB_HOST` and `HUB_PORT` to the same values used for the
+join, then pass the stored token without printing it:
+
+```sh
+hub_token=$(node -e 'const fs=require("node:fs");const agent=process.env.PI_CODING_AGENT_DIR||`${process.env.HOME}/.pi/agent`;process.stdout.write(JSON.parse(fs.readFileSync(`${agent}/memory/hub.json`, "utf8")).token)')
+pi-memory join "$HUB_HOST" --port "$HUB_PORT" --token "$hub_token" --force
+unset hub_token HUB_HOST HUB_PORT
+```
+
+For a manual setup or recovery, use the fallback procedure below.
+
+#### Manual fallback
+
+The hub API token and SSH Git key are separate credentials: the token
+authenticates HTTP memory requests, while the per-machine SSH key authenticates
+wiki Git access. Prepare the hub first. It needs the dedicated `git` account
+with `git-shell`, the canonical bare repository at `/home/git/wiki.git`, and a
+working wiki clone whose `origin` is that repository so librarian commits can
+be pushed. SSH and the hub API must be reachable from spokes over the trusted
+private network (normally Nebula); keep the plain-HTTP API off untrusted
+networks.
+
+On the spoke, confirm the hostname to use as its hub token identity, then mint
+one token on the hub and keep its output secure; it is shown only once:
 
 ```sh
 npm run memory -- hub-token add laptop.example
 ```
 
-The spoke identity returned by `/status` is the token's configured spoke name.
-Use that name deliberately: pushed sessions are attributed to it.
+Before the first join, generate the default SSH keypair if it does not exist
+and have a hub administrator enroll only the public-key line in
+`/home/git/.ssh/authorized_keys`, one key per spoke, with the comment set to
+the spoke hostname. Never transfer the private key.
 
-#### 2. Join from the spoke
-
-From the spoke, use the hub's Nebula IP or resolvable host name (without a
-scheme or port). `--port` is the HTTP API port; SSH uses its normal port and
-connects via the `memory-hub` SSH alias.
+Then join from the spoke using the hub's Nebula IP or resolvable hostname
+(without a scheme or port). `--port` is the HTTP API port; SSH uses its normal
+port through the `memory-hub` alias:
 
 ```sh
+ssh-keygen -t ed25519 -C "$(hostname)" -f ~/.ssh/id_ed25519 -N "" # only if absent
+cat ~/.ssh/id_ed25519.pub # transfer this public key only, securely
 pi-memory join 100.64.0.12 --port 6342 --token '<spoke-token>'
 ```
 
-The command first verifies authenticated `GET /status` and prints the spoke
-identity assigned by the hub. It then writes the private
-`~/.pi/agent/memory/hub.json` (mode 0600), updates only its clearly marked
-`Host memory-hub` block in `~/.ssh/config`, and clones
-`git@memory-hub:wiki.git` into `~/.pi/agent/wiki`. An existing wiki checkout
-with that exact origin is fetched and fast-forwarded; a checkout with another
-origin is left untouched and reported as a likely migration or mistake. An
-existing `hub.json` is never replaced implicitly. Use `--force` only when
+If the spoke has no working `systemctl --user` manager, add `--no-push` to
+the join command above; run `pi-memory push` manually instead of relying on
+the timer.
+
+Enrolling the key before this first join avoids a failed wiki clone and the
+need to rerun with `--force`. The command verifies authenticated `GET /status`
+and the spoke identity, writes private
+`~/.pi/agent/memory/hub.json` (mode 0600), updates its managed SSH block, clones
+`git@memory-hub:wiki.git` into `~/.pi/agent/wiki`, and installs the push timer.
+An existing wiki checkout with that exact origin is fetched and
+fast-forwarded; a checkout with another origin is left untouched and reported.
+An existing `hub.json` is never replaced implicitly. Use `--force` only when
 intentionally changing/reasserting the hub pointer; the old file is backed up
-next to it. Use `--no-push` to skip timer installation.
+next to it. `--no-push` skips timer installation.
 
-#### 3. Enroll the spoke SSH key (human step)
-
-If the wiki clone reports SSH `Permission denied (publickey)`, the HTTP setup
-has succeeded but Git access has not. On the spoke, generate a keypair if
-needed, then provide its public key to the hub administrator:
-
-```sh
-ssh-keygen -t ed25519 -C "$(hostname)"   # only if ~/.ssh/id_ed25519 does not exist
-cat ~/.ssh/id_ed25519.pub
-```
-
-The operator must append the public-key line to
-`/home/git/.ssh/authorized_keys` on the hub, one line per spoke, with the
-comment set to the spoke hostname. Do not paste or transfer the private key.
-This is intentionally a manual enrollment step; `pi-memory join` does not
-attempt privileged commands. After enrollment, rerun the join so the wiki
-clone can complete (use `--force` because the first attempt already stored
-`hub.json`):
-
-```sh
-pi-memory join 100.64.0.12 --port 6342 --token '<spoke-token>' --force
-```
-
-#### 4. Verify
-
-Check that the configured hub is reachable and confirms the expected identity:
+Verify API access and identity, test a push, and check the SSH Git connection:
 
 ```sh
 pi-memory join --status
+pi-memory push
+git ls-remote git@memory-hub:wiki.git
 ```
 
-The normal join installs and enables `pi-memory-push.timer`; it pushes local
-Pi sessions every 15 minutes. Check timer state with
-`systemctl --user status pi-memory-push.timer`. To test immediately, run
-`pi-memory push`; the hub records the spoke identity from the token. Remote
-`memory_search` and `memory_expand` calls use the hub as soon as `hub.json`
-exists. `join --status` verifies API access; it does not test Git key access or
-push a session.
+The normal join enables `pi-memory-push.timer` to push local Pi sessions every
+15 minutes; inspect it with `systemctl --user status pi-memory-push.timer`.
+Remote `memory_search` and `memory_expand` calls use the hub once `hub.json`
+exists. `join --status` checks API access; the push and `git ls-remote` test the
+separate ingest and Git paths.
 
 ### Spoke push
 
