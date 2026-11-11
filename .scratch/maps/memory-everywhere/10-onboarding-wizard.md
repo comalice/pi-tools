@@ -1,7 +1,7 @@
 # Spoke onboarding wizard
 
 **Type:** task
-**Status:** retired — superseded by [ticket 11](11-git-over-http-enroll.md) before the live run (see below)
+**Status:** closed — retired; its live-validation gate was satisfied by ticket 11's successful `Intermezzo` run (2026-11-10)
 **Blocked by:** None (re-scopes the closed memory join / git-hosting work into its human-facing shape)
 
 ## Question

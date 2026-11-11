@@ -1,7 +1,7 @@
 # Git over hub HTTP + self-service enrollment
 
 **Type:** task
-**Status:** implemented — live second-machine validation remains
+**Status:** closed
 **Blocked by:** None. Supersedes ticket 07's git-shell hosting; retires ticket 10's wizard.
 
 ## Question
@@ -82,3 +82,13 @@ and Git round-trip locally, but do not validate the live private network,
 service-user deployment, or a real user's systemd user manager. TLS remains an
 operator/reverse-proxy concern; the hub's HTTP listener should stay on the
 trusted private network. V1 intentionally serves one repository, `wiki.git`.
+
+**Live run (2026-11-10, deferred gate satisfied):** spoke `Intermezzo`
+enrolled end-to-end with the two actions — install, `pi-memory enroll
+100.100.0.21`, one register paste; wiki cloned, push timer enabled. Field
+findings: (1) the hub's nftables allowed SSH from the overlay but not 6342 —
+rule added, requirement now documented in `docs/memory.md`; (2) `enroll`
+cannot distinguish an unreachable hub from an unregistered token and polls
+silently — follow-up gap (needs a reachability preflight with a loud error);
+(3) the hub logs no per-request activity, which left the hub side blind
+during debugging — follow-up gap.

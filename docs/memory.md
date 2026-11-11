@@ -385,7 +385,14 @@ responses. The endpoints are:
 The operator's goal is exactly two actions on a new computer: install the
 project, then generate and paste one key to the hub. No account provisioning or
 privileged setup is required on either machine. The hub must already be
-reachable over the trusted private network, and its
+reachable over the trusted private network — including its host firewall:
+the hub's input rules must accept the API port (default 6342) from the
+overlay subnet on the overlay interface, the same way SSH is typically
+allowed. A firewall REJECT surfaces on the spoke as an instant "could not
+connect"; `pi-memory enroll` cannot distinguish that from an unregistered
+token and will keep polling, so verify reachability first with
+`curl http://<hub>:6342/status` (expect a `Bearer token required` reply).
+The hub's
 wiki clone must be connected to the local bare repository once:
 
 ```sh
