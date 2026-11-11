@@ -37,6 +37,32 @@ function runJoinStatus(agentDir: string) {
   });
 }
 
+async function runJoinWithTokenStdin(agentDir: string, homeDir: string, binDir: string, host: string, port: number, token: string) {
+  await fs.mkdir(binDir, { recursive: true });
+  const fakeGit = path.join(binDir, "git");
+  await fs.writeFile(fakeGit, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  return new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      "--experimental-strip-types", path.resolve("src/memory/cli.ts"),
+      "join", host, "--port", String(port), "--token-stdin", "--no-push",
+    ], {
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        PI_CODING_AGENT_DIR: agentDir,
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", status => resolve({ status, stdout, stderr }));
+    child.stdin.end(token);
+  });
+}
+
 describe("memory join setup helpers", () => {
   it("writes a private hub config, refuses overwrite, and force backs up the prior config", async () => {
     const directory = await temporary();
@@ -126,6 +152,22 @@ describe("memory join setup helpers", () => {
     const cliStatus = await runJoinStatus(agentDir);
     assert.equal(cliStatus.status, 0, cliStatus.stderr);
     assert.equal(JSON.parse(cliStatus.stdout).spoke, "laptop.example");
+
+    const stdinAgent = path.join(directory, "stdin-agent");
+    const stdinHome = path.join(directory, "stdin-home");
+    const fakeBin = path.join(directory, "fake-bin");
+    const stdinJoin = await runJoinWithTokenStdin(stdinAgent, stdinHome, fakeBin, "127.0.0.1", port, "secret");
+    assert.equal(stdinJoin.status, 0, stdinJoin.stderr);
+    assert.doesNotMatch(stdinJoin.stdout + stdinJoin.stderr, /secret/);
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(stdinAgent, "memory", "hub.json"), "utf8")), {
+      hub: `http://127.0.0.1:${port}`,
+      token: "secret",
+    });
+    assert.equal((await fs.stat(path.join(stdinAgent, "memory", "hub.json"))).mode & 0o777, 0o600);
+    const invalidStdin = await runJoinWithTokenStdin(path.join(directory, "invalid-agent"), path.join(directory, "invalid-home"), fakeBin, "127.0.0.1", port, "bad token");
+    assert.notEqual(invalidStdin.status, 0);
+    assert.match(invalidStdin.stdout, /must be non-empty and contain no whitespace/);
+
     await fs.writeFile(path.join(agentDir, "memory", "hub.json"), JSON.stringify({ hub: `http://127.0.0.1:${port}`, token: "rejected" }), { mode: 0o600 });
     const rejected = await memoryJoinStatus(path.join(agentDir, "memory", "hub.json"));
     assert.equal(rejected.reachable, false);

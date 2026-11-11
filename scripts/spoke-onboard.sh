@@ -201,6 +201,7 @@ finish() {
 run_wizard() {
 
 TOTAL_STAGES=5
+unset TOKEN TOKEN_JSON 2>/dev/null || true
 
 banner "Spoke memory onboarding"
 
@@ -216,15 +217,26 @@ command -v make >/dev/null 2>&1 || die "make is required because pi-memory join 
 command -v systemctl >/dev/null 2>&1 || die "systemctl is required because pi-memory join installs the spoke push timer."
 systemctl --user show-environment >/dev/null 2>&1 || die "A working systemd --user manager is required for pi-memory join to install the push timer."
 DETECTED_HOSTNAME=$(hostname -f 2>/dev/null || hostname)
-ask HUB_ADDRESS "Hub Nebula/overlay address (hostname or IP, no scheme or port):"
+ask HUB_ADDRESS "Hub Nebula/overlay address (hostname or IP, no scheme or port):" || die "No hub address was entered."
 [[ -n "$HUB_ADDRESS" ]] || die "A hub overlay address is required."
 [[ "$HUB_ADDRESS" =~ ^[A-Za-z0-9][A-Za-z0-9.:_-]*$ ]] || die "Use only a hostname or IP address, without user@, scheme, port, or whitespace."
-ask HUB_PORT "Hub API port [6342]:"
+ask HUB_PORT "Hub API port [6342]:" || die "No hub API port was entered."
 HUB_PORT=${HUB_PORT:-6342}
 [[ "$HUB_PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$HUB_PORT >= 1 && 10#$HUB_PORT <= 65535 )) || die "Hub API port must be an integer from 1 to 65535."
-ask SPOKE_NAME "Confirm spoke name / hostname [$DETECTED_HOSTNAME]:"
+ask SPOKE_NAME "Confirm spoke name / hostname [$DETECTED_HOSTNAME]:" || die "No spoke name was entered."
 SPOKE_NAME=${SPOKE_NAME:-$DETECTED_HOSTNAME}
 [[ "$SPOKE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] || die "Spoke name must be 1–255 letters, digits, dots, underscores, or hyphens, and start with a letter or digit."
+HUB_CONFIG_FILE="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/memory/hub.json"
+REUSE_HUB_CONFIG=0
+if [[ -L "$HUB_CONFIG_FILE" ]]; then die "Refusing to read a symlinked hub config: $HUB_CONFIG_FILE"; fi
+if [[ -e "$HUB_CONFIG_FILE" ]]; then
+  [[ -f "$HUB_CONFIG_FILE" ]] || die "Hub config exists but is not a regular file: $HUB_CONFIG_FILE"
+  if ! TOKEN=$(node -e 'const fs=require("node:fs");const {isIP}=require("node:net");try{const st=fs.lstatSync(process.argv[1]);const c=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const h=process.argv[2];const url=`http://${isIP(h)===6?`[${h}]`:h}:${process.argv[3]}`;if(st.isSymbolicLink()||!st.isFile()||(st.mode&0o077)!==0||c.hub!==url||typeof c.token!=="string"||!c.token||c.token.length>256||/\s/.test(c.token))process.exitCode=1;else process.stdout.write(c.token)}catch{process.exitCode=1}' "$HUB_CONFIG_FILE" "$HUB_ADDRESS" "$HUB_PORT"); then
+    die "A hub.json already exists but is invalid or points to another hub. Inspect it manually before onboarding."
+  fi
+  REUSE_HUB_CONFIG=1
+  say "Matching hub.json found; its token will be reused and join will back up the config with --force."
+fi
 say "Hub: $HUB_ADDRESS:$HUB_PORT · spoke identity: $SPOKE_NAME"
 if ping -c 1 -W 3 "$HUB_ADDRESS" >/dev/null 2>&1; then
   say "Overlay ping succeeded."
@@ -245,11 +257,17 @@ EOF_INSTRUCTIONS
   exit 1
 fi
 say "SSH reached the hub. The wizard will not automate Nebula enrollment."
+if [[ "$REUSE_HUB_CONFIG" == 1 ]]; then
+  EXISTING_STATUS=$(pi-memory join --status) || die "The existing hub config does not authenticate; inspect it or revoke its hub token before retrying."
+  EXISTING_SPOKE=$(printf '%s' "$EXISTING_STATUS" | node -e 'let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{try{const o=JSON.parse(s);if(!o.ok||typeof o.spoke!=="string")throw Error();process.stdout.write(o.spoke)}catch{process.exitCode=1}})') || die "Could not read the identity from the existing hub status."
+  [[ "$EXISTING_SPOKE" == "$SPOKE_NAME" ]] || die "The existing hub token identifies '$EXISTING_SPOKE', not '$SPOKE_NAME'. Inspect the hub config before proceeding."
+  unset EXISTING_STATUS EXISTING_SPOKE
+fi
 
 stage "Hub-side preparation"
 say "Check the dedicated git account and /home/git/wiki.git; missing or incorrect setup is changed only after confirmation."
 HUB_REPO=""
-ask HUB_REPO "Absolute path to the dirac-pi-tools checkout on the hub (contains package.json):"
+ask HUB_REPO "Absolute path to the dirac-pi-tools checkout on the hub (contains package.json):" || die "No hub repository path was entered."
 [[ "$HUB_REPO" == /* && "$HUB_REPO" != *$'\n'* ]] || die "Enter the absolute path to the dirac-pi-tools checkout on the hub."
 GIT_SHELL=$(ssh "$HUB_ADDRESS" 'command -v git-shell') || die "Could not locate git-shell on the hub. Install git-shell and rerun."
 [[ "$GIT_SHELL" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "Hub returned an unexpected git-shell path; inspect it manually: $GIT_SHELL"
@@ -285,20 +303,37 @@ else
   die "/home/git/wiki.git exists but is not a valid bare repository. Inspect it manually; the wizard will not replace it."
 fi
 
-say "Minting a one-spoke token on the hub. Its output is captured silently and is never displayed or saved by this wizard."
-confirm "Mint a new hub token for spoke '$SPOKE_NAME'?" || die "Stopped before minting a hub token."
 HUB_REPO_B64=$(printf '%s' "$HUB_REPO" | base64 | tr -d '\r\n')
-TOKEN_JSON=$(ssh "$HUB_ADDRESS" "bash -c 'repo=\$(printf \"%s\" \"\$1\" | base64 -d); cd -- \"\$repo\" && npm run --silent memory -- hub-token add \"\$2\"' _ '$HUB_REPO_B64' '$SPOKE_NAME'") || die "Hub token creation failed. Check the repo path and hub CLI output, then rerun; no token was captured."
-TOKEN_CREATED=1
+TOKEN_CREATED=0
+TOKEN_MINT_PENDING=0
 JOIN_STARTED=0
 JOIN_SUCCEEDED=0
 trap cleanup_unjoined_token EXIT
-if ! TOKEN=$(printf '%s' "$TOKEN_JSON" | node -e 'let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{try{const o=JSON.parse(s);if(!o.ok||typeof o.token!=="string"||!o.token||/\s/.test(o.token)||o.spoke!==process.argv[1])process.exitCode=1;else process.stdout.write(o.token)}catch{process.exitCode=1}})' "$SPOKE_NAME"); then
+if [[ "$REUSE_HUB_CONFIG" == 1 ]]; then
+  say "Reusing the token from the matching hub.json; no new token will be minted."
+else
+  say "Minting a one-spoke token on the hub. Its output is captured silently and is never displayed or saved by this wizard."
+  confirm "Mint a new hub token for spoke '$SPOKE_NAME'?" || die "Stopped before minting a hub token."
+  TOKEN_LIST=$(hub_token_cli list) || die "Could not inspect hub tokens. Check the repository path and hub CLI, then rerun."
+  TOKEN_EXISTS=$(printf '%s' "$TOKEN_LIST" | node -e 'let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{try{const o=JSON.parse(s);if(!o.ok||!Array.isArray(o.tokens))throw Error();process.stdout.write(o.tokens.some(t=>t.spoke===process.argv[1])?"yes":"no")}catch{process.exitCode=1}})' "$SPOKE_NAME") || die "Hub token list returned unexpected output."
+  unset TOKEN_LIST
+  [[ "$TOKEN_EXISTS" == no ]] || die "A hub token already exists for '$SPOKE_NAME' but no matching local hub.json was found. Revoke it or restore its config before retrying."
+  TOKEN_MINT_PENDING=1
+  if TOKEN_JSON=$(hub_token_cli add "$SPOKE_NAME"); then
+    TOKEN_CREATED=1
+    TOKEN_MINT_PENDING=0
+  else
+    MINT_STATUS=$?
+    if (( MINT_STATUS != 130 && MINT_STATUS != 143 && MINT_STATUS != 255 )); then TOKEN_MINT_PENDING=0; fi
+    die "Hub token creation failed. Check the repo path and hub CLI output; any ambiguous interrupted mint will be revoked on exit."
+  fi
+  if ! TOKEN=$(printf '%s' "$TOKEN_JSON" | node -e 'let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{try{const o=JSON.parse(s);if(!o.ok||typeof o.token!=="string"||!o.token||/\s/.test(o.token)||o.spoke!==process.argv[1])process.exitCode=1;else process.stdout.write(o.token)}catch{process.exitCode=1}})' "$SPOKE_NAME"); then
+    unset TOKEN_JSON
+    die "Hub token command returned unexpected output; the token was not displayed. It will be revoked on exit."
+  fi
   unset TOKEN_JSON
-  die "Hub token command returned unexpected output; the token was not displayed. Inspect hub token state before retrying."
+  say "Hub token created and held in memory for the join stage."
 fi
-unset TOKEN_JSON
-say "Hub token created and held in memory for the join stage."
 
 stage "Enroll spoke SSH key"
 SSH_DIR="$HOME/.ssh"
@@ -319,7 +354,7 @@ elif [[ ! -f "$PRIVATE_KEY" || ! -f "$PUBLIC_KEY" ]]; then
 fi
 chmod 700 "$SSH_DIR"
 [[ -f "$PRIVATE_KEY" && ! -L "$PRIVATE_KEY" && -f "$PUBLIC_KEY" && ! -L "$PUBLIC_KEY" ]] || die "Expected regular id_ed25519 key files in $SSH_DIR."
-[[ $(wc -l < "$PUBLIC_KEY") -eq 1 ]] || die "The public key file must contain exactly one key line."
+[[ $(awk 'END { print NR }' "$PUBLIC_KEY") -eq 1 ]] || die "The public key file must contain exactly one key line."
 ssh-keygen -lf "$PUBLIC_KEY" >/dev/null 2>&1 || die "The public key file is not a valid SSH key."
 KEY_FIELDS=$(awk 'NF >= 2 { print $1, $2; exit }' "$PUBLIC_KEY")
 [[ "$KEY_FIELDS" == ssh-ed25519\ * ]] || die "The default public key is not ed25519. Resolve it manually; the wizard will not print or replace keys."
@@ -329,7 +364,7 @@ say "Enrolling the public key on the hub (comment: $SPOKE_NAME). Private key rem
 confirm "Append this spoke's public key to /home/git/.ssh/authorized_keys on the hub using sudo?" || die "Stopped before enrolling the spoke SSH key."
 REMOTE_KEY_SCRIPT='set -euo pipefail; key=$(printf "%s" "$1" | base64 -d); [[ ! -L /home/git/.ssh ]] || exit 1; install -d -o git -g git -m 700 /home/git/.ssh; [[ ! -L /home/git/.ssh/authorized_keys ]] || exit 1; [[ ! -e /home/git/.ssh/authorized_keys || -f /home/git/.ssh/authorized_keys ]] || exit 1; touch /home/git/.ssh/authorized_keys; chown git:git /home/git/.ssh/authorized_keys; chmod 600 /home/git/.ssh/authorized_keys; if grep -Fxq -- "$key" /home/git/.ssh/authorized_keys; then printf "Public key already enrolled.\\n"; else printf "%s\\n" "$key" >> /home/git/.ssh/authorized_keys; printf "Public key enrolled.\\n"; fi'
 printf -v REMOTE_KEY_COMMAND 'sudo bash -c %q -- %q' "$REMOTE_KEY_SCRIPT" "$PUBKEY_B64"
-ssh -tt "$HUB_ADDRESS" "$REMOTE_KEY_COMMAND" || die "Could not enroll the public key on the hub. The token remains in memory; resolve access and rerun only after checking whether the key was appended."
+ssh -tt "$HUB_ADDRESS" "$REMOTE_KEY_COMMAND" || die "Could not enroll the public key on the hub. The unjoined token will be revoked automatically; check whether the key was appended before rerunning."
 unset PUBKEY_B64 REMOTE_KEY_SCRIPT REMOTE_KEY_COMMAND PUBKEY_LINE KEY_FIELDS
 say "SSH key enrollment completed before the first wiki clone."
 
@@ -337,7 +372,11 @@ stage "Join the memory hub"
 say "pi-memory join writes hub.json with mode 0600, updates the managed Host memory-hub block, clones the wiki, and installs the spoke push timer."
 confirm "Run pi-memory join against $HUB_ADDRESS:$HUB_PORT for '$SPOKE_NAME'?" || die "Stopped before writing spoke hub configuration; the unjoined token will be revoked automatically."
 JOIN_STARTED=1
-pi-memory join "$HUB_ADDRESS" --port "$HUB_PORT" --token "$TOKEN" || die "pi-memory join failed. The wizard will retain the token only if join wrote it to hub.json; inspect state before retrying."
+if [[ "$REUSE_HUB_CONFIG" == 1 ]]; then
+  printf '%s' "$TOKEN" | pi-memory join "$HUB_ADDRESS" --port "$HUB_PORT" --token-stdin --force || die "pi-memory join failed. The wizard will retain the token only if it remains in hub.json; inspect state before retrying."
+else
+  printf '%s' "$TOKEN" | pi-memory join "$HUB_ADDRESS" --port "$HUB_PORT" --token-stdin || die "pi-memory join failed. The wizard will retain the token only if join wrote it to hub.json; inspect state before retrying."
+fi
 JOIN_SUCCEEDED=1
 unset TOKEN
 
@@ -357,19 +396,26 @@ die() {
   exit 1
 }
 
+hub_token_cli() {
+  local action="$1" spoke="${2:-}" remote_script remote_command
+  remote_script='set -euo pipefail; repo=$(printf "%s" "$1" | base64 -d); cd -- "$repo"; if [[ -n "$3" ]]; then npm run --silent memory -- hub-token "$2" "$3"; else npm run --silent memory -- hub-token "$2"; fi'
+  printf -v remote_command 'bash -c %q -- %q %q %q' "$remote_script" "$HUB_REPO_B64" "$action" "$spoke"
+  ssh "$HUB_ADDRESS" "$remote_command"
+}
+
 cleanup_unjoined_token() {
   local exit_status=$? revoke=1 config_file
   trap - EXIT
-  if [[ "${TOKEN_CREATED:-0}" == 1 && "${JOIN_SUCCEEDED:-0}" != 1 ]]; then
+  if [[ ( "${TOKEN_CREATED:-0}" == 1 || "${TOKEN_MINT_PENDING:-0}" == 1 ) && "${JOIN_SUCCEEDED:-0}" != 1 ]]; then
     if [[ "${JOIN_STARTED:-0}" == 1 && -n "${TOKEN:-}" ]]; then
       config_file="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/memory/hub.json"
-      if [[ -f "$config_file" ]] && node -e 'try { process.exit(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).token === process.argv[2] ? 0 : 1) } catch { process.exit(1) }' "$config_file" "$TOKEN"; then
+      if [[ -f "$config_file" ]] && printf '%s' "$TOKEN" | node -e 'let t="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>t+=x);process.stdin.on("end",()=>{try{process.exit(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).token===t?0:1)}catch{process.exit(1)}})' "$config_file"; then
         revoke=0
         warn "Join wrote hub.json before failing; the token was retained. Inspect the partial setup before retrying."
       fi
     fi
     if (( revoke )); then
-      if ssh "$HUB_ADDRESS" "bash -c 'repo=\$(printf \"%s\" \"\$1\" | base64 -d); cd -- \"\$repo\" && npm run --silent memory -- hub-token revoke \"\$2\"' _ '$HUB_REPO_B64' '$SPOKE_NAME'" >/dev/null 2>&1; then
+      if hub_token_cli revoke "$SPOKE_NAME" >/dev/null 2>&1; then
         say "The unjoined spoke token was revoked on the hub."
       else
         warn "Could not automatically revoke the unjoined token; on the hub run: npm run memory -- hub-token revoke $SPOKE_NAME"

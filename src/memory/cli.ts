@@ -16,7 +16,7 @@ type Options = Record<string, string | string[]>;
 
 function parseArgs(argv: string[]) {
   const out: Options = {};
-  const flags = new Set(["--all", "--no-replies", "--rebuild", "--backfill", "--force", "--no-push", "--status"]);
+  const flags = new Set(["--all", "--no-replies", "--rebuild", "--backfill", "--force", "--no-push", "--status", "--token-stdin"]);
   let command = "";
   const args: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -80,6 +80,17 @@ function emit(value: unknown) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+async function readStdinToken() {
+  process.stdin.setEncoding("utf8");
+  let token = "";
+  for await (const chunk of process.stdin) {
+    if (token.length + chunk.length > 256) throw new Error("Token from stdin exceeds 256 characters");
+    token += chunk;
+  }
+  if (!token || /\s/.test(token)) throw new Error("Token from stdin must be non-empty and contain no whitespace");
+  return token;
+}
+
 function openReadIndex(filename: string) {
   const db = new DatabaseSync(filename, { readOnly: true });
   db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000;");
@@ -115,17 +126,19 @@ try {
   const blobDirectory = path.join(path.dirname(paths.index), "blobs");
 
   if (command === "join") {
-    only(out, ["--status", "--port", "--token", "--force", "--no-push"]);
+    only(out, ["--status", "--port", "--token", "--token-stdin", "--force", "--no-push"]);
     if (out["--status"]) {
-      if (args.length || value(out, "--port") || value(out, "--token") || out["--force"] || out["--no-push"]) throw new Error("Usage: memory join --status");
+      if (args.length || value(out, "--port") || value(out, "--token") || out["--token-stdin"] || out["--force"] || out["--no-push"]) throw new Error("Usage: memory join --status");
       const result = await memoryJoinStatus();
       emit(result);
       if (!result.ok) process.exitCode = 1;
     } else {
-      if (args.length !== 1) throw new Error("Usage: memory join <hub-host> [--port 6342] --token <spoke-token> [--force] [--no-push]");
-      const token = value(out, "--token");
-      if (!token) throw new Error("memory join requires --token <spoke-token>");
+      if (args.length !== 1) throw new Error("Usage: memory join <hub-host> [--port 6342] (--token <spoke-token>|--token-stdin) [--force] [--no-push]");
       const port = positiveInt(value(out, "--port"), "port", 6342, 1, 65535);
+      const tokenArg = value(out, "--token");
+      const tokenFromStdin = Boolean(out["--token-stdin"]);
+      if (Boolean(tokenArg) === tokenFromStdin) throw new Error("memory join requires exactly one of --token <spoke-token> or --token-stdin");
+      const token = tokenFromStdin ? await readStdinToken() : tokenArg!;
       const result = await memoryJoin({ host: args[0], port, token, force: Boolean(out["--force"]), noPush: Boolean(out["--no-push"]) });
       emit(result);
     }
