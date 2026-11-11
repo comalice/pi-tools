@@ -1,12 +1,11 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, chmodSync, readFileSync, renameSync, unlinkSync, writeFileSync, linkSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, chmodSync, renameSync, unlinkSync, writeFileSync, linkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { getMemoryHubStatus, loadMemoryHubConfig, type MemoryHubConfig } from "./remote.ts";
-
-const SSH_BEGIN = "# BEGIN pi-memory managed memory-hub";
-const SSH_END = "# END pi-memory managed memory-hub";
+import { getMemoryHubStatus, loadMemoryHubConfig, type MemoryHubConfig, type MemoryHubStatus } from "./remote.ts";
+import { validateSpokeName } from "./hub-tokens.ts";
 
 export type CommandResult = { status: number | null; stdout: string; stderr: string };
 export type CommandRunner = (command: string, args: string[], cwd?: string) => CommandResult;
@@ -35,6 +34,28 @@ export function hubOrigin(hostInput: string, port = 6342): { host: string; hub: 
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("--port must be an integer from 1 to 65535");
   const urlHost = isIP(host) === 6 ? `[${host}]` : host;
   return { host, hub: `http://${urlHost}:${port}` };
+}
+
+export function validateHubUrl(input: string) {
+  let url: URL;
+  try { url = new URL(input); } catch { throw new Error("hub address must be an absolute HTTP(S) origin"); }
+  if (!(url.protocol === "http:" || url.protocol === "https:") || !url.hostname || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("hub address must be an HTTP(S) origin without credentials, path, query, or fragment");
+  }
+  return url.origin;
+}
+
+export function parseHubBundle(bundle: string): MemoryHubConfig {
+  const match = /^pih1\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]{43})$/.exec(bundle);
+  if (!match || Buffer.from(match[2], "base64url").length !== 32 || Buffer.from(match[2], "base64url").toString("base64url") !== match[2]) throw new Error("Invalid pih1 enrollment bundle");
+  let payload: any;
+  try {
+    const decoded = Buffer.from(match[1], "base64url");
+    if (decoded.toString("base64url") !== match[1]) throw new Error();
+    payload = JSON.parse(decoded.toString("utf8"));
+  } catch { throw new Error("Invalid pih1 enrollment bundle payload"); }
+  if (!payload || typeof payload !== "object" || typeof payload.hub !== "string") throw new Error("Invalid pih1 enrollment bundle payload: expected hub URL");
+  return { hub: validateHubUrl(payload.hub), token: match[2] };
 }
 
 function ensurePrivateDirectory(directory: string) {
@@ -66,72 +87,21 @@ export function writeHubConfig(config: MemoryHubConfig, filename: string, force 
   try {
     writeFileSync(temporary, contents, { mode: 0o600, flag: "wx" });
     chmodSync(temporary, 0o600);
-    let backup: string | undefined;
     if (existing) {
-      backup = nextBackupName(filename);
+      const backup = nextBackupName(filename);
       copyFileSync(filename, backup);
       chmodSync(backup, 0o600);
       renameSync(temporary, filename);
-    } else {
-      // link is atomic and fails rather than clobbering a file created concurrently.
-      linkSync(temporary, filename);
-      unlinkSync(temporary);
+      chmodSync(filename, 0o600);
+      return { filename, backup };
     }
+    linkSync(temporary, filename);
+    unlinkSync(temporary);
     chmodSync(filename, 0o600);
-    return { filename, backup };
+    return { filename, backup: undefined };
   } finally {
     try { unlinkSync(temporary); } catch { /* absent or already renamed */ }
   }
-}
-
-function managedSshBlock(host: string) {
-  return `${SSH_BEGIN}\nHost memory-hub\n  HostName ${host}\n  User git\n  IdentitiesOnly yes\n${SSH_END}`;
-}
-
-export function updateSshConfig(filename: string, hostInput: string) {
-  const host = validateHubHost(hostInput);
-  const directory = path.dirname(filename);
-  ensurePrivateDirectory(directory);
-  let original = "";
-  let mode = 0o600;
-  try {
-    const stat = lstatSync(filename);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`SSH config must be a regular file: ${filename}`);
-    mode = stat.mode & 0o777;
-    original = readFileSync(filename, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-
-  const starts = [...original.matchAll(new RegExp(SSH_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))];
-  const ends = [...original.matchAll(new RegExp(SSH_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))];
-  if (starts.length !== ends.length || starts.length > 1 || (starts.length === 1 && starts[0].index! >= ends[0].index!)) {
-    throw new Error(`SSH config has malformed or duplicate pi-memory markers: ${filename}`);
-  }
-
-  const block = managedSshBlock(host);
-  let updated: string;
-  if (starts.length === 1) {
-    const start = starts[0].index!;
-    const end = ends[0].index! + SSH_END.length;
-    updated = `${original.slice(0, start)}${block}${original.slice(end)}`;
-  } else {
-    if (/^\s*Host\s+(?:[^\n]*\s)?memory-hub(?:\s|$)/im.test(original)) {
-      throw new Error(`SSH config already defines Host memory-hub outside the managed block; resolve that entry manually before joining`);
-    }
-    updated = `${block}\n${original}`;
-  }
-
-  const temporary = `${filename}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-  try {
-    writeFileSync(temporary, updated, { mode: 0o600, flag: "wx" });
-    chmodSync(temporary, mode);
-    renameSync(temporary, filename);
-    chmodSync(filename, mode);
-  } finally {
-    try { unlinkSync(temporary); } catch { /* absent or already renamed */ }
-  }
-  return filename;
 }
 
 function commandOk(runner: CommandRunner, command: string, args: string[], cwd?: string): CommandResult {
@@ -140,41 +110,50 @@ function commandOk(runner: CommandRunner, command: string, args: string[], cwd?:
   return result;
 }
 
-function authFailure(message: string, sshDir: string) {
-  const key = ["id_ed25519.pub", "id_rsa.pub"].map(name => path.join(sshDir, name)).find(filename => existsSync(filename));
-  const pubkey = key ? `Public key to enroll: ${key}.` : `No default public key was found. Generate one first with: ssh-keygen -t ed25519 -C "$(hostname)".`;
-  return new Error(`SSH authentication to the hub wiki failed. ${pubkey} The operator must append that public key as one line to /home/wikigit/.ssh/authorized_keys on the hub (one line per spoke, comment = spoke hostname). Do this manually; this command will not use sudo. Git said: ${message.trim()}`);
+function privateGitConfig(wikiDir: string) {
+  const gitDir = path.join(wikiDir, ".git");
+  const gitStat = lstatSync(gitDir);
+  if (gitStat.isSymbolicLink() || !gitStat.isDirectory()) throw new Error(`Wiki Git metadata must be a real directory: ${gitDir}`);
+  const config = path.join(gitDir, "config");
+  const configStat = lstatSync(config);
+  if (configStat.isSymbolicLink() || !configStat.isFile()) throw new Error(`Wiki Git config must be a regular file: ${config}`);
+  return config;
 }
 
-export function ensureWikiClone(wikiDir: string, runner: CommandRunner = runCommand, sshDir = path.join(os.homedir(), ".ssh")) {
-  const remote = "wikigit@memory-hub:wiki.git";
+export function ensureWikiClone(wikiDir: string, hub: string, token: string, runner: CommandRunner = runCommand) {
+  const origin = `${validateHubUrl(hub)}/git/wiki.git`;
   let exists = false;
   try { lstatSync(wikiDir); exists = true; } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   if (!exists) {
-    const cloned = runner("git", ["clone", remote, wikiDir]);
+    const cloned = runner("git", ["-c", `http.extraHeader=Authorization: Bearer ${token}`, "clone", origin, wikiDir]);
     if (cloned.status !== 0) {
       const message = `${cloned.stderr}\n${cloned.stdout}`;
-      if (/permission denied|publickey|authentication failed/i.test(message)) throw authFailure(message, sshDir);
-      throw new Error(`Could not clone wiki from ${remote}: ${message.trim() || `git exited ${cloned.status}`}`);
+      throw new Error(`Could not clone wiki from ${origin}: ${message.trim() || `git exited ${cloned.status}`}`);
     }
-    return { action: "cloned", directory: wikiDir };
+    chmodSync(wikiDir, 0o700);
+  } else {
+    const stat = lstatSync(wikiDir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Wiki path exists but is not a real directory: ${wikiDir}`);
+    commandOk(runner, "git", ["rev-parse", "--is-inside-work-tree"], wikiDir);
+    const currentOrigin = commandOk(runner, "git", ["remote", "get-url", "origin"], wikiDir).stdout.trim();
+    if (currentOrigin !== origin) throw new Error(`Wiki repository at ${wikiDir} has a different origin (${currentOrigin || "none"}); refusing to replace it. This may be a hub migration or a mistake; inspect it manually.`);
   }
 
-  const stat = lstatSync(wikiDir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Wiki path exists but is not a real directory: ${wikiDir}`);
-  commandOk(runner, "git", ["rev-parse", "--is-inside-work-tree"], wikiDir);
-  const origin = commandOk(runner, "git", ["remote", "get-url", "origin"], wikiDir).stdout.trim();
-  if (origin !== remote) throw new Error(`Wiki repository at ${wikiDir} has a different origin (${origin || "none"}); refusing to replace it. This may be a hub migration or a mistake; inspect it manually.`);
-  commandOk(runner, "git", ["fetch", "origin"], wikiDir);
-  commandOk(runner, "git", ["pull", "--ff-only"], wikiDir);
-  return { action: "updated", directory: wikiDir };
+  const config = privateGitConfig(wikiDir);
+  commandOk(runner, "git", ["config", "http.extraHeader", `Authorization: Bearer ${token}`], wikiDir);
+  chmodSync(wikiDir, 0o700);
+  chmodSync(config, 0o600);
+  if (exists) {
+    commandOk(runner, "git", ["fetch", "origin"], wikiDir);
+    commandOk(runner, "git", ["pull", "--ff-only"], wikiDir);
+  }
+  return { action: exists ? "updated" : "cloned", directory: wikiDir, origin };
 }
 
-export async function memoryJoin(options: {
-  host: string;
-  port?: number;
+export interface JoinOptions {
+  hub: string;
   token: string;
   force?: boolean;
   noPush?: boolean;
@@ -182,19 +161,16 @@ export async function memoryJoin(options: {
   homeDir?: string;
   repoDir?: string;
   runner?: CommandRunner;
-}) {
-  if (!options.token || /\s/.test(options.token)) throw new Error("--token must be a non-empty token without whitespace");
-  const { host, hub } = hubOrigin(options.host, options.port ?? 6342);
+}
+
+async function completeJoin(options: JoinOptions, remoteStatus: MemoryHubStatus) {
+  const hub = validateHubUrl(options.hub);
   const agentDir = options.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? path.join(options.homeDir ?? os.homedir(), ".pi", "agent");
-  const sshDir = path.join(options.homeDir ?? os.homedir(), ".ssh");
   const runner = options.runner ?? runCommand;
   const config = { hub, token: options.token };
-  const remoteStatus = await getMemoryHubStatus(config);
   try {
     const configResult = writeHubConfig(config, path.join(agentDir, "memory", "hub.json"), options.force ?? false);
-    const sshConfig = updateSshConfig(path.join(sshDir, "config"), host);
-    const wiki = ensureWikiClone(path.join(agentDir, "wiki"), runner, sshDir);
-
+    const wiki = ensureWikiClone(path.join(agentDir, "wiki"), hub, options.token, runner);
     let pushTimer: { installed: boolean; status: string };
     if (options.noPush) {
       pushTimer = { installed: false, status: "skipped (--no-push)" };
@@ -208,7 +184,6 @@ export async function memoryJoin(options: {
       hub,
       spoke: remoteStatus.spoke,
       hubConfig: configResult,
-      sshConfig,
       wiki,
       pushTimer,
       summary: "Memory tools now use the hub. Sessions push every 15 minutes when the timer is installed. Verify hub reachability and your spoke identity with pi-memory join --status; run pi-memory push to test session upload.",
@@ -216,6 +191,67 @@ export async function memoryJoin(options: {
   } catch (error) {
     throw new Error(`Hub ${hub} authenticated this spoke as "${remoteStatus.spoke}", but onboarding did not finish: ${(error as Error).message}`);
   }
+}
+
+export async function memoryJoin(options: JoinOptions) {
+  if (!options.token || /\s/.test(options.token)) throw new Error("--token must be a non-empty token without whitespace");
+  const hub = validateHubUrl(options.hub);
+  const remoteStatus = await getMemoryHubStatus({ hub, token: options.token });
+  return completeJoin({ ...options, hub }, remoteStatus);
+}
+
+function delay(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason ?? new Error("Enrollment cancelled"));
+    const timer = setTimeout(done, ms);
+    function done() { signal?.removeEventListener("abort", abort); resolve(); }
+    function abort() { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal?.reason ?? new Error("Enrollment cancelled")); }
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+export async function memoryEnroll(options: {
+  hub: string;
+  spoke?: string;
+  noPush?: boolean;
+  agentDir?: string;
+  homeDir?: string;
+  repoDir?: string;
+  runner?: CommandRunner;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  secret?: string;
+  onRegisterCommand?: (command: string) => void;
+}) {
+  const hub = validateHubUrl(options.hub);
+  const spoke = options.spoke ?? os.hostname();
+  validateSpokeName(spoke);
+  const token = options.secret ?? randomBytes(32).toString("base64url");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token) || Buffer.from(token, "base64url").length !== 32 || Buffer.from(token, "base64url").toString("base64url") !== token) throw new Error("Enrollment secret must be 32 bytes encoded as canonical base64url");
+  const safeSpoke = /^[A-Za-z0-9._-]+$/.test(spoke) ? spoke : `'${spoke.replace(/'/g, "'\\''")}'`;
+  options.onRegisterCommand?.(`pi-memory hub-token register ${safeSpoke} '${token}'`);
+
+  const deadline = Date.now() + (options.timeoutMs ?? 15 * 60 * 1000);
+  const interval = options.pollIntervalMs ?? 5000;
+  let remoteStatus: MemoryHubStatus | undefined;
+  let lastError = "hub has not accepted the token yet";
+  while (!remoteStatus && Date.now() < deadline) {
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error("Enrollment cancelled");
+    try {
+      const accepted = await getMemoryHubStatus({ hub, token }, options.signal);
+      if (accepted.spoke !== spoke) throw new Error(`Registered token identifies spoke "${accepted.spoke}", expected "${spoke}"`);
+      remoteStatus = accepted;
+    } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason ?? error;
+      lastError = (error as Error).message;
+      if (lastError.startsWith("Registered token identifies spoke ")) throw error;
+      const remaining = deadline - Date.now();
+      if (remaining > 0) await delay(Math.min(interval, remaining), options.signal);
+    }
+  }
+  if (!remoteStatus) throw new Error(`Enrollment timed out after ${Math.round((options.timeoutMs ?? 15 * 60 * 1000) / 1000)} seconds waiting for hub-token registration (${lastError}). No hub.json was written.`);
+  return completeJoin({ ...options, hub, token }, remoteStatus);
 }
 
 export async function memoryJoinStatus(filename?: string) {

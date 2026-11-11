@@ -7,6 +7,7 @@ import { readHubTokens, defaultHubTokenFile } from "./hub-tokens.ts";
 import { searchMemory } from "./semantic.ts";
 import { expand, openStore, SCHEMA_VERSION, status } from "./store.ts";
 import { resolveBindAddress } from "../shared/bind.ts";
+import { defaultHubGitRoot, handleGitHttp } from "./git-http.ts";
 
 export const MEMORY_HUB_VERSION = "1";
 const MAX_PI_FILE = 256 * 1024 * 1024;
@@ -15,6 +16,7 @@ const MAX_HTTP_BODY = Math.ceil(MAX_PI_FILE * 4 / 3) + 1024 * 1024;
 export interface MemoryHubOptions {
   index?: string;
   tokenFile?: string;
+  gitRoot?: string;
 }
 
 class HttpError extends Error {
@@ -74,6 +76,7 @@ export function createMemoryHubServer(options: MemoryHubOptions = {}): { server:
   const reader = new DatabaseSync(index, { readOnly: true, timeout: 5000 });
   reader.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000;");
   const tokenFile = options.tokenFile ?? defaultHubTokenFile();
+  const gitRoot = path.resolve(options.gitRoot ?? defaultHubGitRoot());
   const started = Date.now();
   let ingestQueue: Promise<void> = Promise.resolve();
   const serializeIngest = <T>(operation: () => T | Promise<T>) => {
@@ -86,6 +89,10 @@ export function createMemoryHubServer(options: MemoryHubOptions = {}): { server:
     try {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const spoke = bearer(req, tokenFile);
+      if (url.pathname === "/git" || url.pathname.startsWith("/git/")) {
+        if (!["GET", "HEAD", "POST"].includes(req.method ?? "")) throw new HttpError(405, "Git smart-HTTP supports GET, HEAD, and POST");
+        return handleGitHttp(req, res, url.pathname, (req.url ?? "").split("?", 2)[1] ?? "", spoke, gitRoot);
+      }
       if (req.method === "GET" && url.pathname === "/status") {
         const archive = status(reader);
         return send(res, 200, {
