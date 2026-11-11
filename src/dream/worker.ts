@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
@@ -17,10 +17,13 @@ const CHUNK_CHARS = 12_000;
 const MAX_CHUNKS = 40;
 const MAX_PER_CHUNK = 5;
 const MAX_PER_SESSION = 8;
+const MAX_GROK_FILE = 256 * 1024 * 1024;
+const MAX_GROK_RESPONSES = 1_000_000;
+const GROK_NIL_PARENT = "00000000-0000-4000-8000-000000000000";
 const GENERATE_TIMEOUT_MS = 8 * 60 * 1000;
 const KINDS = ["decision", "fact", "process", "gotcha", "ops-pattern"] as const;
 
-export interface Message { id: string; role: string; text: string }
+export interface Message { id: string; role: string; text: string; timestamp?: string }
 export interface Chunk { ids: Set<string>; transcript: string; truncated: boolean }
 export interface Extraction { title: string; kind: string; tags: string[]; entry_ids: string[]; body: string }
 
@@ -99,6 +102,85 @@ export function digestClaude(file: string): Message[] {
   return messages;
 }
 
+/** Read one conversation from a shared Grok backend export. */
+export function digestGrok(file: string, sessionId: string): Message[] {
+  const exportFile = file.split("#", 1)[0];
+  const size = statSync(exportFile).size;
+  if (size > MAX_GROK_FILE) throw new Error(`Grok export exceeds ${MAX_GROK_FILE} byte limit: ${exportFile}`);
+  const contents = readFileSync(exportFile, "utf8");
+  let data: any;
+  try { data = JSON.parse(contents); }
+  catch { throw new Error(`Malformed Grok export JSON: ${exportFile}`); }
+  if (!data || !Array.isArray(data.conversations)) throw new Error(`Unsupported Grok export: ${exportFile}; expected a conversations array`);
+  const item = data.conversations.find((candidate: any) => candidate?.conversation?.id === sessionId);
+  if (!item) throw new Error(`Grok conversation not found: ${sessionId} in ${exportFile}`);
+  if (!Array.isArray(item.responses)) throw new Error(`Unsupported Grok conversation ${sessionId}: expected responses array`);
+  if (item.responses.length > MAX_GROK_RESPONSES) throw new Error(`Grok conversation ${sessionId} exceeds ${MAX_GROK_RESPONSES} response limit`);
+
+  const responses = new Map<string, any>();
+  for (const wrapper of item.responses) {
+    const response = wrapper?.response;
+    if (!response || typeof response._id !== "string" || responses.has(response._id)) {
+      throw new Error(`Invalid or duplicate Grok response in conversation ${sessionId}`);
+    }
+    responses.set(response._id, response);
+  }
+  const childIds = new Map<string, Set<string>>();
+  for (const [id, response] of responses) {
+    if (Array.isArray(response.children)) {
+      for (const child of response.children) {
+        if (typeof child === "string" && responses.has(child)) {
+          const children = childIds.get(id) ?? new Set<string>();
+          children.add(child);
+          childIds.set(id, children);
+        }
+      }
+    }
+    const parent = response.parent_response_id;
+    if (typeof parent === "string" && parent && parent !== GROK_NIL_PARENT && responses.has(parent)) {
+      const children = childIds.get(parent) ?? new Set<string>();
+      children.add(id);
+      childIds.set(parent, children);
+    }
+  }
+
+  const ordered: any[] = [];
+  const visited = new Set<string>();
+  const visit = (root: string) => {
+    const stack = [root];
+    while (stack.length) {
+      const id = stack.pop()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+      const response = responses.get(id);
+      if (!response) continue;
+      ordered.push(response);
+      const children = [...(childIds.get(id) ?? [])];
+      for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]);
+    }
+  };
+  for (const [id, response] of responses) {
+    const parent = response.parent_response_id;
+    if (typeof parent !== "string" || !parent || parent === GROK_NIL_PARENT || !responses.has(parent)) visit(id);
+  }
+  // Malformed/disconnected cycles should not silently discard otherwise usable messages.
+  for (const id of responses.keys()) visit(id);
+
+  const messages: Message[] = [];
+  for (const response of ordered) {
+    const sender = response.sender;
+    const role = sender === "human" ? "user" : typeof sender === "string" && sender ? "assistant" : null;
+    if (!role) continue;
+    const text = typeof response.message === "string" ? response.message : "";
+    if (!text.trim()) continue;
+    const rawMs = response.create_time?.$date?.$numberLong;
+    const date = rawMs === undefined || rawMs === null ? null : new Date(Number(rawMs));
+    const timestamp = date && !Number.isNaN(date.valueOf()) ? date.toISOString() : undefined;
+    messages.push({ id: response._id, role, text, ...(timestamp ? { timestamp } : {}) });
+  }
+  return messages;
+}
+
 export function chunkMessages(messages: Message[]): Chunk[] {
   const chunks: Chunk[] = [];
   let ids = new Set<string>();
@@ -112,10 +194,11 @@ export function chunkMessages(messages: Message[]): Chunk[] {
     truncated = false;
   };
   for (const message of messages) {
-    let piece = `[e:${message.id}] ${message.role}:\n${message.text}\n\n`;
+    const timestamp = message.timestamp ? ` (${message.timestamp})` : "";
+    let piece = `[e:${message.id}] ${message.role}${timestamp}:\n${message.text}\n\n`;
     let pieceTruncated = false;
     if (piece.length > CHUNK_CHARS) {
-      piece = `[e:${message.id}] ${message.role}:\n${message.text.slice(0, CHUNK_CHARS)}\n[… single message hard-truncated from ${message.text.length} characters]\n\n`;
+      piece = `[e:${message.id}] ${message.role}${timestamp}:\n${message.text.slice(0, CHUNK_CHARS)}\n[… single message hard-truncated from ${message.text.length} characters]\n\n`;
       pieceTruncated = true;
     }
     if (transcript && transcript.length + piece.length > CHUNK_CHARS) flush();
@@ -204,8 +287,8 @@ export const piGenerate: Generate = (model, prompt) => new Promise((resolve, rej
 
 export interface WorkerResult { staged: number; titles: string[]; chunks: number; chunkFailures: string[]; truncatedMessages: boolean }
 
-export async function runWorker(opts: { file: string; source: string; session: string; project: string; origin?: string; model: string; wikiDir?: string }, generate: Generate = piGenerate): Promise<WorkerResult> {
-  const messages = opts.source === "claude" ? digestClaude(opts.file) : opts.source === "opencode" ? digestOpenCode(opts.file, opts.session) : digestPi(opts.file);
+export async function runWorker(opts: { file: string; source: string; session: string; project: string; model: string; wikiDir?: string }, generate: Generate = piGenerate): Promise<WorkerResult> {
+  const messages = opts.source === "claude" ? digestClaude(opts.file) : opts.source === "grok" ? digestGrok(opts.file, opts.session) : opts.source === "opencode" ? digestOpenCode(opts.file, opts.session) : digestPi(opts.file);
   if (!messages.length) return { staged: 0, titles: [], chunks: 0, chunkFailures: [], truncatedMessages: false };
   const chunks = chunkMessages(messages);
   const wikiDir = opts.wikiDir ?? process.env.PI_WIKI_DIR ?? path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "wiki");

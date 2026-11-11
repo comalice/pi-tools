@@ -25,6 +25,7 @@ const ENTRY_ID_FORMAT: Record<string, string> = {
   pi: "the `id` fields of `message` records in the session JSONL (one record per line).",
   claude: "the `uuid` fields of messages in `chat_messages` (a claude.ai export JSON document).",
   opencode: "the `id` fields of message rows (`msg_…`) in the OpenCode SQLite store.",
+  grok: "the `_id` fields of responses in `prod-grok-backend.json` (a grok.com export JSON document).",
 };
 
 function parseArgs(argv: string[]) {
@@ -86,7 +87,7 @@ function enumerate() {
     for (const row of rows) {
       const existing = state.sessions[row.session_id];
       if (existing && existing.status !== "pending") continue;
-      const file = row.source === "opencode" ? opencodeRoot : row.file;
+      const file = row.source === "opencode" ? opencodeRoot : row.source === "grok" ? row.file?.split("#", 1)[0] : row.file;
       if (!ENTRY_ID_FORMAT[row.source] || !file || !existsSync(file)) {
         state.sessions[row.session_id] = { status: "skipped", source: row.source, project: row.project, file: row.file ?? "", origin: row.origin, error: "no readable session file for this source" };
         continue;

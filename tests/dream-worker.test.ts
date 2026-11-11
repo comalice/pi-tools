@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { chunkMessages, digestClaude, digestPi, extractJsonArray, piSpawnArgs, runWorker, validateExtractions } from "../src/dream/worker.ts";
+import { chunkMessages, digestClaude, digestGrok, digestPi, extractJsonArray, runWorker, validateExtractions } from "../src/dream/worker.ts";
 import { parsePage } from "../src/wiki/format.ts";
 import { DatabaseSync } from "node:sqlite";
 
@@ -44,6 +44,46 @@ describe("dream worker harness", () => {
       { uuid: "u3", sender: "system", content: [{ type: "text", text: "skip" }] },
     ] }));
     assert.deepEqual(digestClaude(claude).map(m => m.id), ["u1", "u2"]);
+  });
+
+  it("digests only the requested Grok conversation in child-chain order", async () => {
+    const directory = await tempDir();
+    const file = path.join(directory, "prod-grok-backend.json");
+    const timestamp = { $date: { $numberLong: "1760000000000" } };
+    const response = (id: string, sender: string, message: string, parent: string | null, children: string[] = []) => ({
+      _id: id, sender, message, parent_response_id: parent, children, create_time: timestamp,
+    });
+    await fs.writeFile(file, JSON.stringify({ conversations: [
+      { conversation: { id: "other" }, responses: [{ response: response("other-id", "human", "wrong chat", null) }] },
+      { conversation: { id: "wanted" }, responses: [
+        { response: response("answer", "grok-model", "the answer", "question") },
+        { response: response("empty", "human", "  ", "answer") },
+        { response: response("question", "human", "the question", null, ["answer", "empty"]) },
+        { response: response("unknown-role", "", "must be skipped", "empty") },
+      ] },
+    ] }));
+
+    const messages = digestGrok(`${file}#wanted`, "wanted");
+    assert.deepEqual(messages, [
+      { id: "question", role: "user", text: "the question", timestamp: "2025-10-09T08:53:20.000Z" },
+      { id: "answer", role: "assistant", text: "the answer", timestamp: "2025-10-09T08:53:20.000Z" },
+    ]);
+
+    let prompt = "";
+    const result = await runWorker({ file: `${file}#wanted`, source: "grok", session: "wanted", project: "grok", model: "fake" }, async (_model, value) => {
+      prompt = value;
+      return "[]";
+    });
+    assert.equal(result.chunks, 1);
+    assert.match(prompt, /\[e:question\]/);
+    assert.match(prompt, /\[e:answer\]/);
+    assert.match(prompt, /2025-10-09T08:53:20\.000Z/);
+    assert.doesNotMatch(prompt, /wrong chat|unknown-role/);
+    assert.throws(() => digestGrok(file, "missing"), /Grok conversation not found: missing/);
+
+    const malformed = path.join(directory, "malformed.json");
+    await fs.writeFile(malformed, "not json");
+    assert.throws(() => digestGrok(malformed, "wanted"), /Malformed Grok export JSON/);
   });
 
   it("chunks at message boundaries and hard-truncates oversized messages", () => {
