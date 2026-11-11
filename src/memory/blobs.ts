@@ -114,41 +114,57 @@ function importRoot(db: DatabaseSync, source: ImportSource, blobDirectory: strin
   return { sourceRoot, configured };
 }
 
-function replacePayloadVersion<T>(sourceRoot: string, origin: string, filename: string, destination: string, copied: boolean, ingest: () => T): T {
+interface StoredPayload { file: string; filename: string; copied: boolean }
+
+// Replace prior blob versions of the same imported filenames (per origin dir), run one ingest with
+// them moved aside, then drop them. On failure the stored blobs are removed and the previous
+// versions restored, so a failed import never duplicates a session across two live blobs.
+function withReplacedVersions<T>(sourceRoot: string, origin: string, stored: StoredPayload[], ingest: () => T): T {
   const originDir = path.join(sourceRoot, originDirectory(origin));
-  const suffix = `--${safeFilename(filename)}`;
-  const previous = existsSync(originDir) ? readdirSync(originDir).filter(name => name.endsWith(suffix)).map(name => path.join(originDir, name)).filter(file => file !== destination) : [];
-  if (!previous.length) {
-    try { return ingest(); } catch (error) {
-      if (copied) try { unlinkSync(destination); } catch { /* already absent */ }
-      throw error;
-    }
+  const previousByFile = stored.map(item => {
+    const suffix = `--${safeFilename(item.filename)}`;
+    const previous = existsSync(originDir)
+      ? readdirSync(originDir).filter(name => name.endsWith(suffix)).map(name => path.join(originDir, name)).filter(file => file !== item.file && !stored.some(other => other.file === file))
+      : [];
+    return { item, previous };
+  });
+  const dropStored = () => { for (const { item } of previousByFile) if (item.copied) try { unlinkSync(item.file); } catch { /* already absent */ } };
+  if (!previousByFile.some(entry => entry.previous.length)) {
+    try { return ingest(); } catch (error) { dropStored(); throw error; }
   }
-  for (const file of previous) {
+  for (const { previous } of previousByFile) for (const file of previous) {
     const st = lstatSync(file);
     if (st.isSymbolicLink() || !st.isFile()) throw new Error(`Unexpected blob entry: ${file}`);
   }
   const backup = path.join(path.dirname(sourceRoot), `.push-replaced-${randomUUID()}`);
   mkdirSync(backup, { mode: 0o700 });
-  const moved: string[] = [];
+  const moved: { from: string; to: string }[] = [];
   try {
-    for (const file of previous) {
-      const saved = path.join(backup, path.basename(file));
-      renameSync(file, saved);
-      moved.push(saved);
+    for (const { previous } of previousByFile) for (const file of previous) {
+      const to = path.join(backup, `${randomUUID()}--${path.basename(file)}`);
+      renameSync(file, to);
+      moved.push({ from: file, to });
     }
     const result = ingest();
     try { rmSync(backup, { recursive: true, force: true }); } catch { /* backup is outside the scanned blob root */ }
     return result;
   } catch (error) {
-    if (copied) try { unlinkSync(destination); } catch { /* already absent */ }
+    dropStored();
     let restoreFailed = false;
-    for (const saved of moved) {
-      try { renameSync(saved, path.join(originDir, path.basename(saved))); } catch { restoreFailed = true; }
+    for (const { from, to } of moved) {
+      try { renameSync(to, from); } catch { restoreFailed = true; }
     }
     if (!restoreFailed) try { rmSync(backup, { recursive: true, force: true }); } catch { /* retain failed recovery data */ }
     throw error;
   }
+}
+
+// The whole-root ingest stamps every re-ingested file with the process-default origin; re-point
+// exactly the sessions this call imported at their true origin so pushed/imported provenance is
+// precise and unchanged co-tenant blobs are never re-tagged.
+function markImportedOrigin(db: DatabaseSync, source: ImportSource, origin: string, files: string[]) {
+  const mark = db.prepare("UPDATE entries SET origin=? WHERE source=? AND session_id=(SELECT session_id FROM source_files WHERE source=? AND file=?)");
+  for (const file of files) mark.run(origin, source, source, file);
 }
 
 export function importPayload(db: DatabaseSync, source: ImportSource, filename: string, bytes: Uint8Array, blobDirectory: string, opts: { origin?: string; replaceFilename?: boolean } = {}) {
@@ -162,10 +178,12 @@ export function importPayload(db: DatabaseSync, source: ImportSource, filename: 
   const runIngest = () => {
     if (configured) db.prepare("UPDATE source_config SET root=? WHERE source=?").run(sourceRoot, source);
     else registerSource(db, source, sourceRoot);
-    return ingestSource(db, source, sourceRoot, { origin });
+    const result = ingestSource(db, source, sourceRoot);
+    markImportedOrigin(db, source, origin, [stored.file]);
+    return result;
   };
   const ingest = source === "pi" && opts.replaceFilename
-    ? replacePayloadVersion(sourceRoot, origin, filename, stored.file, stored.copied, runIngest)
+    ? withReplacedVersions(sourceRoot, origin, [{ file: stored.file, filename, copied: stored.copied }], runIngest)
     : runIngest();
   return { source, copied: stored.copied ? 1 : 0, files: [stored.file], ingest };
 }
@@ -177,17 +195,24 @@ export function importFiles(db: DatabaseSync, source: ImportSource, inputs: stri
   const origin = opts.origin ?? originValue();
   const files = walkPayloads(inputs);
   if (!files.length) throw new Error("Import input contains no regular files");
-  const stored: string[] = [];
+  const stored: StoredPayload[] = [];
   let copied = 0;
   for (const file of files) {
     const result = putBlob(sourceRoot, origin, readFileSync(file), path.basename(file));
-    stored.push(result.file);
+    stored.push({ file: result.file, filename: path.basename(file), copied: result.copied });
     if (result.copied) copied++;
   }
-  if (configured) db.prepare("UPDATE source_config SET root=? WHERE source=?").run(sourceRoot, source);
-  else registerSource(db, source, sourceRoot);
-  const ingest = ingestSource(db, source, sourceRoot, { origin });
-  return { source, copied, files: stored, ingest };
+  const runIngest = () => {
+    if (configured) db.prepare("UPDATE source_config SET root=? WHERE source=?").run(sourceRoot, source);
+    else registerSource(db, source, sourceRoot);
+    const result = ingestSource(db, source, sourceRoot);
+    markImportedOrigin(db, source, origin, stored.map(item => item.file));
+    return result;
+  };
+  // Pi sessions are append-mostly: re-importing a grown file must replace its previous blob, not
+  // accumulate a duplicate session (field-found 2026-11-10: duplicate blobs poisoned every ingest).
+  const ingest = source === "pi" ? withReplacedVersions(sourceRoot, origin, stored, runIngest) : runIngest();
+  return { source, copied, files: stored.map(item => item.file), ingest };
 }
 
 function physicalFile(source: ImportSource, file: string) {

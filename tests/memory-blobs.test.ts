@@ -93,6 +93,69 @@ describe("memory export blobs", () => {
     } finally { db.close(); }
   });
 
+  it("re-importing a grown Pi session replaces its previous blob instead of duplicating the session", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-blobs-pi-replace-"));
+    dirs.push(directory);
+    const input = path.join(directory, "input");
+    await piSession(input, "--home-spoke--", "growing-chat", "version one durable phrase");
+    const db = openStore(path.join(directory, "archive.sqlite"));
+    try {
+      const blobRoot = path.join(directory, "blobs");
+      const first = importFiles(db, "pi", [path.join(input, "--home-spoke--", "growing-chat.jsonl")], blobRoot);
+      assert.equal(first.ingest.indexed, 1);
+      const originDir = path.join(blobRoot, "pi", os.hostname());
+      assert.equal((await fs.readdir(originDir)).length, 1);
+      // The session grows (append-mostly) and is re-imported by the same filename.
+      const grown = `${await fs.readFile(path.join(input, "--home-spoke--", "growing-chat.jsonl"), "utf8")}${JSON.stringify({ type: "message", id: "u2", parentId: "u", message: { role: "assistant", content: [{ type: "text", text: "version two follow-up phrase" }] } })}\n`;
+      await fs.writeFile(path.join(input, "--home-spoke--", "growing-chat.jsonl"), grown);
+      const second = importFiles(db, "pi", [path.join(input, "--home-spoke--", "growing-chat.jsonl")], blobRoot);
+      assert.equal(second.ingest.indexed, 1);
+      assert.equal((second.ingest as any).duplicates ?? 0, 0);
+      assert.equal((await fs.readdir(originDir)).length, 1, "old version blob must be replaced, not accumulated");
+      assert.equal((db.prepare("SELECT COUNT(*) n FROM source_files WHERE source='pi' AND session_id='growing-chat'").get() as any).n, 1);
+      assert.equal(search(db, { query: "follow-up", scope: "all" }).length, 1);
+    } finally { db.close(); }
+  });
+
+  it("tolerates a stray duplicate-session blob in a blob root without failing the walk", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-blobs-pi-dup-"));
+    dirs.push(directory);
+    const input = path.join(directory, "input");
+    await piSession(input, "--home-spoke--", "dup-chat", "duplicate tolerance marker");
+    const db = openStore(path.join(directory, "archive.sqlite"));
+    try {
+      const blobRoot = path.join(directory, "blobs");
+      importFiles(db, "pi", [path.join(input, "--home-spoke--", "dup-chat.jsonl")], blobRoot);
+      // Simulate the field-found poisoned state: a second, differently-digested blob of the same session.
+      const originDir = path.join(blobRoot, "pi", os.hostname());
+      const [blob] = await fs.readdir(originDir);
+      const bytes = await fs.readFile(path.join(originDir, blob));
+      await fs.writeFile(path.join(originDir, `${"f".repeat(64)}--dup-chat.jsonl`), bytes);
+      const result = ingestPi(db, path.join(blobRoot, "pi"));
+      assert.equal((result as any).duplicates, 1);
+      assert.equal(search(db, { query: "duplicate tolerance marker", scope: "all" }).length, 1);
+    } finally { db.close(); }
+  });
+
+  it("scopes provenance to imported files only, never re-tagging co-tenant blobs", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-blobs-origin-"));
+    dirs.push(directory);
+    const input = path.join(directory, "input");
+    await piSession(input, "a", "origin-alpha", "alpha session marker");
+    await piSession(input, "b", "origin-beta", "beta session marker");
+    const db = openStore(path.join(directory, "archive.sqlite"));
+    try {
+      const blobRoot = path.join(directory, "blobs");
+      importFiles(db, "pi", [path.join(input, "a", "origin-alpha.jsonl")], blobRoot, { origin: "hubbox" });
+      importFiles(db, "pi", [path.join(input, "b", "origin-beta.jsonl")], blobRoot, { origin: "spokebox" });
+      const rows = (db.prepare("SELECT session_id, origin FROM entries WHERE source='pi' ORDER BY session_id").all() as any[]).map(row => ({ session_id: row.session_id, origin: row.origin }));
+      assert.deepEqual(rows, [
+        { session_id: "origin-alpha", origin: "hubbox" },
+        { session_id: "origin-beta", origin: "spokebox" },
+      ]);
+    } finally { db.close(); }
+  });
+
   it("backfills a legacy Pi watch root so hub pushes can import through blobs", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-blobs-pi-"));
     dirs.push(directory);

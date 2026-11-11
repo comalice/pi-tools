@@ -55,14 +55,21 @@ export function ingestPi(db:DatabaseSync,root:string,opts:{origin?:string}={}){
   let rootStat;try{rootStat=lstatSync(root);}catch(e:any){if(e?.code==="ENOENT")return {source:"pi",missing:true,indexed:0,unchanged:0,removed:0};throw e;}
   if(rootStat.isSymbolicLink()||!rootStat.isDirectory())throw new Error(`Pi sessions root must be a real directory: ${root}`);
   registerSource(db,source,normalized);
-  const files=walk(root);const found=new Set<string>();let indexed=0,unchanged=0;
+  const files=walk(root);const found=new Set<string>();let indexed=0,unchanged=0,duplicates=0;
   for(const file of files){
     const data=piRecords(file);const prior=db.prepare("SELECT session_id,fingerprint FROM source_files WHERE source=? AND file=?").get(source,file) as any;
     found.add(file);
     if(prior?.fingerprint===data.fingerprint){unchanged++;continue;}
     const sessionId=String(data.header.id);
     const duplicate=db.prepare("SELECT file FROM source_files WHERE source=? AND session_id=? AND file<>? LIMIT 1").get(source,sessionId,file) as any;
-    if(duplicate && !(importBlobRoot(root, source) && !existsSync(duplicate.file)))throw new Error(`Duplicate Pi session ID ${sessionId} in multiple files; snapshot left unchanged`);
+    if(duplicate){
+      if(!importBlobRoot(root, source))throw new Error(`Duplicate Pi session ID ${sessionId} in multiple files; snapshot left unchanged`);
+      // Blob roots accumulate one blob per imported version; a lingering older/newer duplicate must
+      // not poison the whole walk (field-found 2026-11-10: one stray duplicate broke every push).
+      // Keep the first-sorted file, count, and continue; a missing duplicate file is a replaced
+      // version mid-ingest and falls through to be re-pointed.
+      if(existsSync(duplicate.file)){duplicates++;continue;}
+    }
     const project=data.header.cwd?path.resolve(String(data.header.cwd)):"unknown";
     replaceFileSession(db,source,file,prior?.session_id,sessionId,project,data.entries,data.fingerprint,data.size,{origin:opts.origin});indexed++;
   }
@@ -76,7 +83,7 @@ export function ingestPi(db:DatabaseSync,root:string,opts:{origin?:string}={}){
     }
     db.prepare("DELETE FROM source_files WHERE source=? AND file=?").run(source,row.file);const still=db.prepare("SELECT 1 FROM source_files WHERE source=? AND session_id=? LIMIT 1").get(source,row.session_id);if(!still){db.prepare("DELETE FROM documents WHERE source=? AND session_id=?").run(source,row.session_id);db.prepare("DELETE FROM entries WHERE source=? AND session_id=?").run(source,row.session_id);db.prepare("DELETE FROM sessions WHERE source=? AND session_id=?").run(source,row.session_id);removed++;}
   }});
-  return {source,indexed,unchanged,removed};
+  return {source,indexed,unchanged,removed,...(duplicates?{duplicates}:0)};
 }
 const MAX_WIKI_PAGE = 512 * 1024;
 const MAX_WIKI_PAGES = 10_000;
