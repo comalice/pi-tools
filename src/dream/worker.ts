@@ -246,6 +246,8 @@ export function extractionPrompt(meta: { source: string; session: string; projec
 
 Rules:
 - Extract only durable knowledge: decisions (with rationale), facts (checkable statements), processes (repeatable procedures), gotchas (failure modes and fixes), ops-patterns (repetitive, failure-prone, or expensive operations, with occurrence counts).
+- Do NOT extract expiring observations: point-in-time status, progress, counts, or verification results ("tests pass", "build succeeded", review outcomes); absence-of-feature notes ("no X exists yet"); transient environment, permission, or dependency state; one-off task details with no repeatable lesson. These are discarded downstream.
+- Durability test: would this still be true and useful in three months, after the code or setup changes? If not, omit it.
 - Fewer is better; most chunks yield 0-2 extractions. Output [] when nothing qualifies.
 - Every claim must be supported by the entry_ids you cite. Copy entry IDs VERBATIM from the [e:...] markers; an ID you invent is a validation failure.
 - Redact secrets on sight.

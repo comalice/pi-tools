@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { chunkMessages, digestClaude, digestGrok, digestPi, extractJsonArray, runWorker, validateExtractions } from "../src/dream/worker.ts";
+import { chunkMessages, digestClaude, digestGrok, digestPi, extractJsonArray, extractionPrompt, runWorker, validateExtractions } from "../src/dream/worker.ts";
 import { parsePage } from "../src/wiki/format.ts";
 import { DatabaseSync } from "node:sqlite";
 
@@ -121,6 +121,20 @@ describe("dream worker harness", () => {
     assert.equal(bad.items.length, 1);
     assert.equal(bad.errors.length, 2);
     assert.match(bad.errors[0], /not present in this chunk/);
+  });
+
+  it("prompt steers the extractor away from expiring observations", () => {
+    const prompt = extractionPrompt(
+      { source: "pi", session: "s1", project: "/p" },
+      { transcript: "[e:m1] user: hi", ids: new Set(["m1"]), truncated: false },
+      0,
+      1,
+    );
+    assert.match(prompt, /Do NOT extract expiring observations/);
+    assert.match(prompt, /absence-of-feature/);
+    assert.match(prompt, /verification results/);
+    assert.match(prompt, /three months/, "states the durability test");
+    assert.match(prompt, /Output \[\] when nothing qualifies/);
   });
 
   it("runs the state machine end to end with retries, dedupe, and staging", async () => {

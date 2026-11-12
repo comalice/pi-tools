@@ -17,7 +17,10 @@ different stores of trust: a wiki page asserts, the archive proves.
   session's origin machine and project path in the prompt — returns a JSON
   array of extractions, code validates them (verbatim entry IDs,
   enumerated kinds, bounded counts), and validated extractions are persisted
-  to `staging/`. The model never touches tools. The runner resumes after
+  to `staging/`. The prompt rejects expiring observations (point-in-time
+  status, verification results, absence-of-feature notes, transient
+  environment state) with a three-month durability test, so staging skews
+  toward knowledge the librarian can actually promote. The model never touches tools. The runner resumes after
   interruption, retries failed sessions once, and serves a loopback admin
   console at a per-startup token URL. Design lineage: the state-machine and
   context-budget ideas from `~/git/maelstrom-code`, minimally adapted.
