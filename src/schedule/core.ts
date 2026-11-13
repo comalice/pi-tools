@@ -178,9 +178,9 @@ with open(sys.argv[1], encoding='utf-8') as f:
     d = json.load(f)
 session = d['session']
 prompt = d['prompt']
-model = d.get('model') or ''
-timeout = d.get('timeoutMinutes') or 30
-cwd = d.get('cwd') or ''
+model = d.get('model', '')
+timeout = d.get('timeoutMinutes', 30)
+cwd = d.get('cwd', '')
 kind = d['spec']['type']
 if (not isinstance(session, str) or not re.fullmatch(r'[0-9a-zA-Z_-]{8,80}', session)
     or not isinstance(prompt, str) or not prompt.strip() or prompt.startswith('@')
@@ -194,6 +194,7 @@ for value in (session, prompt, model, str(timeout), cwd, kind):
 PYTHON
 then
   echo "$(date -Is) wake $ID: invalid payload" >> "$OUT"
+  echo "$(date -Is) wake $ID: final status 1" >> "$OUT"
   exit 1
 fi
 mapfile -d '' -t FIELDS_ARRAY < "$FIELDS"
@@ -212,27 +213,34 @@ if [ "$LOCK_STATUS" -eq 75 ]; then
 elif [ "$LOCK_STATUS" -ne 0 ]; then
   echo "$(date -Is) wake $ID: lock failed: $LOCK_STATUS" >> "$OUT"
   STATUS=$LOCK_STATUS
-elif [ -n "$CWD" ] && ! cd -- "$CWD"; then
-  echo "$(date -Is) wake $ID: cannot enter cwd: $CWD" >> "$OUT"
+elif [ -n "$CWD" ] && ! cd -- "$CWD" 2>/dev/null; then
+  echo "$(date -Is) wake $ID: cannot enter saved cwd" >> "$OUT"
   STATUS=1
 else
   ENV_PATH=$(echo "$PATH" | tr ':' '\\n' | grep -v 'node_modules/.bin' | paste -sd:)
   echo "$(date -Is) wake $ID: resuming $SESSION" >> "$OUT"
   if [ -n "$MODEL" ]; then MODEL_ARGS=(--model "$MODEL"); else MODEL_ARGS=(); fi
-  PATH="$ENV_PATH" timeout "$((TIMEOUT * 60))" /usr/bin/pi --session "$SESSION" --print "\${MODEL_ARGS[@]}" -- "$PROMPT" >> "$OUT" 2>&1 || STATUS=$?
-  echo "$(date -Is) wake $ID: exit $STATUS" >> "$OUT"
+  # Keep the timeout process group alive until escalation even if Pi exits on TERM.
+  PATH="$ENV_PATH" timeout --kill-after=2s "$((TIMEOUT * 60))" /bin/bash -c 'trap "while :; do sleep 1; done" TERM; "$@" & wait "$!"' wake /usr/bin/pi --session "$SESSION" --print "\${MODEL_ARGS[@]}" -- "$PROMPT" >> "$OUT" 2>&1 || STATUS=$?
+  echo "$(date -Is) wake $ID: execution exit $STATUS" >> "$OUT"
 fi
+cleanup_failed() {
+  local operation="$1" code="$2"
+  echo "$(date -Is) wake $ID: cleanup $operation failed (exit $code); inspect unit and registry permissions and systemd user manager" >> "$OUT"
+  [ "$STATUS" -ne 0 ] || STATUS=1
+}
 if [ "$KIND" != recurring ]; then
-  systemctl --user disable --now "$UNIT.timer" >/dev/null 2>&1 || { [ "$STATUS" -ne 0 ] || STATUS=1; }
-  rm -f "$UNITS_DIR/$UNIT.timer" "$UNITS_DIR/$UNIT.service" || { [ "$STATUS" -ne 0 ] || STATUS=1; }
+  systemctl --user disable --now "$UNIT.timer" >/dev/null 2>&1 || cleanup_failed 'systemctl disable' "$?"
+  rm -f "$UNITS_DIR/$UNIT.timer" "$UNITS_DIR/$UNIT.service" 2>/dev/null || cleanup_failed 'remove unit files' "$?"
   # Only remove the registry entry after every sibling unit has gone.
   shopt -s nullglob
   siblings=("$UNITS_DIR/pi-wake-$ID"-[0-9]*.timer "$UNITS_DIR/pi-wake-$ID"-[0-9]*.service)
   if [ ! -e "$UNITS_DIR/pi-wake-$ID.timer" ] && [ ! -e "$UNITS_DIR/pi-wake-$ID.service" ] && [ "\${#siblings[@]}" -eq 0 ]; then
-    rm -f "$SIDE" || { [ "$STATUS" -ne 0 ] || STATUS=1; }
+    rm -f "$SIDE" 2>/dev/null || cleanup_failed 'remove sidecar' "$?"
   fi
-  systemctl --user daemon-reload >/dev/null 2>&1 || { [ "$STATUS" -ne 0 ] || STATUS=1; }
+  systemctl --user daemon-reload >/dev/null 2>&1 || cleanup_failed 'systemctl daemon-reload' "$?"
 fi
+echo "$(date -Is) wake $ID: final status $STATUS" >> "$OUT"
 exit "$STATUS"
 `;
 

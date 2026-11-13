@@ -2,8 +2,8 @@
 
 Prerequisites (the payload scripts assume all of these): a systemd **user**
 session, `pi` at `/usr/bin/pi` (wakes exec that absolute path — symlink if
-your install lives elsewhere), `python3`, and for notifications `notify-send`
-plus a session D-Bus (`/run/user/<uid>/bus`). Wake output is stored in the
+your install lives elsewhere), `python3`, GNU `timeout` and `flock` for wakes,
+and for notifications `notify-send` plus a session D-Bus (`/run/user/<uid>/bus`). Wake output is stored in the
 schedule directory's `logs/`; service failures are also reported to systemd.
 
 `extensions/schedule.ts` gives agents four tools over a shared core
@@ -21,9 +21,9 @@ schedule directory's `logs/`; service failures are also reported to systemd.
   and their sidecar after firing; recurring items persist until
   `cancel_scheduled`.
 - **Wake safety**: one scheduled wake per session at a time (`flock`; busy
-  wakes skip, log and exit 75), `timeout` cap (default 30 min, max 240), stale
-  `node_modules/.bin` PATH entries stripped, full output under the schedule
-  directory's `logs/`. The lock does not detect interactive Pi sessions or
+  wakes skip, log and exit 75), execution timeout (default 30 min, max 240),
+  stale `node_modules/.bin` PATH entries stripped, full output under the
+  schedule directory's `logs/`. The lock does not detect interactive Pi sessions or
   other processes that do not use it.
 - **Calendar validation authority is systemd** — do not hand-validate
   OnCalendar grammar in code.
@@ -35,11 +35,28 @@ cwd. Pi resolves the session ID; the scheduler does not independently verify
 which session Pi opens. Prompts starting with `@` are rejected because Pi can
 interpret them as file arguments. NUL bytes are not supported in arguments.
 
-A fired one-shot or multi-up unit is cleaned up after success, Pi failure,
-timeout or a busy skip. Recurring units remain scheduled. Pi's exit status
-(including timeout status 124) is returned; cleanup failures also fail an
-otherwise successful service. Invalid sidecars fail without cleanup. Concurrent
-multi-up firings can leave an orphaned sidecar; cleanup is not transactional.
+GNU `timeout` sends TERM to the execution process group at the configured
+limit, then KILL two seconds later if the supervised command remains. A wrapper stays
+alive through the grace period even if Pi exits on TERM, so ordinary children
+in that group also receive KILL. Escalation normally returns status 137;
+status 124 is also possible from `timeout`. The nominal execution bound is
+the configured time plus two seconds, subject to OS scheduling and signal
+delivery. It is not an exact wall-clock cap on the entire wake: setup, cleanup,
+systemctl and filesystem operations have no independent deadline, and tasks in
+uninterruptible kernel sleep cannot immediately be killed. Descendants that
+change process group or session escape the timeout group; background children
+can also survive if Pi exits before the deadline. Systemd normally cleans up
+remaining processes in the service cgroup when the service stops, but this is
+not tested here and does not cover processes that leave that cgroup. Do not
+rely on this as a hard bound on all descendants or the session lock.
+
+A fired one-shot or multi-up unit attempts cleanup after success, Pi failure,
+timeout or a busy skip. Recurring units remain scheduled. The execution status
+is returned; cleanup failures also fail an otherwise successful service. Wake
+logs identify failed cleanup operations and their exit codes, and record final
+service status; systemctl diagnostics are suppressed to avoid logging sensitive
+inputs. Pi output itself can contain sensitive data. Invalid sidecars fail
+without cleanup. Concurrent multi-up firings can leave an orphaned sidecar; cleanup is not transactional.
 Busy skips are not queued or retried and can lose a wake. There is no durable
 or exactly-once delivery or acknowledgment.
 
@@ -136,7 +153,10 @@ consumer must be idempotent because execution cannot be exactly once.
 Run `npm test`. `tests/schedule-wake.test.ts` runs generated wake payloads
 with an isolated home, registry and stubbed external commands; it never invokes
 Pi. It checks
-arguments, cwd, output, timeouts, busy skips and cleanup. The generated units
+arguments, cwd, output, timeouts, busy skips and cleanup. The timeout tests use
+real GNU timeout with an accelerated deadline and fake Pi processes, including
+TERM-resistant children; they do not prove an exact deadline or cgroup cleanup.
+The generated units
 are also checked with `systemd-analyze verify`, but the test does not start
 those units through a real user manager. `tests/jobs.test.ts` and
 `tests/jobs-review.test.ts` use private temporary registries and real uniquely

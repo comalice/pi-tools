@@ -22,7 +22,7 @@ async function setup() {
   await Promise.all([home, units, bin, cwd].map((p) => fs.mkdir(p, { recursive: true })));
   process.env.PI_SCHEDULE_DIR = dir;
   process.env.PI_SCHEDULE_UNITS_DIR = units;
-  await fs.writeFile(path.join(bin, "timeout"), `#!/bin/bash\nprintf '%s' "$1" > "$TEST_ROOT/timeout"\nshift\n[ "$1" = /usr/bin/pi ] || exit 90\nshift\n[ "\${TIMEOUT_STATUS:-0}" = 0 ] || exit "$TIMEOUT_STATUS"\nexec "$TEST_ROOT/bin/pi" "$@"\n`, { mode: 0o755 });
+  await fs.writeFile(path.join(bin, "timeout"), `#!/bin/bash\nwhile [[ "$1" = --* ]]; do shift; done\nprintf '%s' "$1" > "$TEST_ROOT/timeout"\nshift\nargs=("$@"); for i in "\${!args[@]}"; do [ "\${args[$i]}" != /usr/bin/pi ] || args[$i]="$TEST_ROOT/bin/pi"; done\n[ "\${TIMEOUT_STATUS:-0}" = 0 ] || exit "$TIMEOUT_STATUS"\nexec "\${args[@]}"\n`, { mode: 0o755 });
   await fs.writeFile(path.join(bin, "pi"), `#!/usr/bin/python3\nimport json, os, sys\nwith open(os.path.join(os.environ['TEST_ROOT'], 'pi.json'), 'w') as f: json.dump({'cwd': os.getcwd(), 'args': sys.argv[1:]}, f)\nwith open(os.path.join(os.environ['TEST_ROOT'], 'pi-path'), 'w') as f: f.write(os.environ['PATH'])\nprint('pi output ' + 'x' * 100000)\nsys.exit(int(os.environ.get('PI_STATUS', '0')))\n`, { mode: 0o755 });
   await fs.writeFile(path.join(bin, "systemctl"), "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$TEST_ROOT/systemctl\"\nexit \"${SYSTEMCTL_STATUS:-0}\"\n", { mode: 0o755 });
   await fs.writeFile(path.join(bin, "flock"), "#!/bin/bash\nexit \"${FLOCK_STATUS:-0}\"\n", { mode: 0o755 });
@@ -164,12 +164,142 @@ test("wake units escape systemd specifiers and environment variables in paths", 
   assert.equal(verify.status, 0, verify.stderr);
 });
 
-test("cleanup failure does not turn a successful wake into a successful service", async () => {
+test("a timed out wake stops TERM-resistant Pi and its child", async () => {
   const t = await setup();
+  // Keep GNU timeout, its process-group signaling and flock real; accelerate the minute boundary.
+  await fs.rm(path.join(t.root, "bin/flock"));
+  await fs.writeFile(path.join(t.root, "bin/timeout"), `#!/bin/bash
+printf '%s' "$$" > "$TEST_ROOT/timeout-pid"
+args=()
+while [[ "$1" = --* ]]; do args+=("$1"); shift; done
+shift # duration
+cmd=("$@"); for i in "\${!cmd[@]}"; do [ "\${cmd[$i]}" != /usr/bin/pi ] || cmd[$i]="$TEST_ROOT/bin/pi"; done
+exec /usr/bin/timeout "\${args[@]}" 0.5 "\${cmd[@]}"
+`, { mode: 0o755 });
+  await fs.writeFile(path.join(t.root, "bin/pi"), `#!/bin/bash
+trap '' TERM
+printf '%s' "$$" > "$TEST_ROOT/parent-pid"
+/bin/bash -c 'trap "" TERM; echo $$ > "$TEST_ROOT/child-pid"; while :; do sleep 1; done' &
+wait
+`, { mode: 0o755 });
+  const entry = { ...wake(t, buildSpec({ when: "1h" })), timeoutMinutes: 1 };
+  const { units } = schedule(entry, () => "");
+  try {
+    const started = Date.now();
+    const run = spawnSync("/bin/bash", [path.join(t.dir, "bin/wake-run.sh"), t.dir, entry.id, units[0], t.units], {
+      cwd: t.home, env: t.env, encoding: "utf8", timeout: 6000,
+    });
+    assert.equal(run.error, undefined, `wake did not finish: ${run.error}`);
+    assert.ok(Date.now() - started < 5500);
+    assert.notEqual(run.status, 0);
+    for (const name of ["parent-pid", "child-pid"]) {
+      const pid = Number(await fs.readFile(path.join(t.root, name), "utf8"));
+      let stat = "";
+      try { stat = await fs.readFile(`/proc/${pid}/stat`, "utf8"); } catch { /* gone */ }
+      assert.ok(!stat || /\) Z /.test(stat), `${name} ${pid} is still running`);
+    }
+    assert.equal(await exists(path.join(t.dir, entry.id + ".json")), false);
+    const lock = spawnSync("/usr/bin/flock", ["-n", path.join(t.dir, `wake-${entry.session}.lock`), "true"]);
+    assert.equal(lock.status, 0, "session lock was not released");
+  } finally {
+    // Also clean up if the implementation never escalates.
+    try { process.kill(-Number(await fs.readFile(path.join(t.root, "timeout-pid"), "utf8")), "SIGKILL"); } catch { /* gone */ }
+  }
+});
+
+test("a timed out wake stops a TERM-resistant child even if Pi exits on TERM", async () => {
+  const t = await setup();
+  await fs.writeFile(path.join(t.root, "bin/timeout"), `#!/bin/bash
+printf '%s' "$$" > "$TEST_ROOT/timeout-pid"
+args=(); while [[ "$1" = --* ]]; do args+=("$1"); shift; done
+shift
+cmd=("$@"); for i in "\${!cmd[@]}"; do [ "\${cmd[$i]}" != /usr/bin/pi ] || cmd[$i]="$TEST_ROOT/bin/pi"; done
+exec /usr/bin/timeout "\${args[@]}" 0.5 "\${cmd[@]}"
+`, { mode: 0o755 });
+  await fs.writeFile(path.join(t.root, "bin/pi"), `#!/bin/bash
+/bin/bash -c 'trap "" TERM; echo $$ > "$TEST_ROOT/child-pid"; while :; do sleep 1; done' &
+wait
+`, { mode: 0o755 });
+  const entry = { ...wake(t), timeoutMinutes: 1 };
+  const { units } = schedule(entry, () => "");
+  try {
+    const run = spawnSync("/bin/bash", [path.join(t.dir, "bin/wake-run.sh"), t.dir, entry.id, units[0], t.units], {
+      cwd: t.home, env: t.env, encoding: "utf8", timeout: 6000,
+    });
+    assert.equal(run.error, undefined);
+    assert.notEqual(run.status, 0);
+    const pid = Number(await fs.readFile(path.join(t.root, "child-pid"), "utf8"));
+    let stat = "";
+    try { stat = await fs.readFile(`/proc/${pid}/stat`, "utf8"); } catch { /* gone */ }
+    assert.ok(!stat || /\) Z /.test(stat), `child ${pid} is still running`);
+  } finally {
+    try { process.kill(-Number(await fs.readFile(path.join(t.root, "timeout-pid"), "utf8")), "SIGKILL"); } catch { /* gone */ }
+  }
+});
+
+test("cleanup failure logs the failed operations and final service status without diagnostics", async () => {
+  const t = await setup();
+  await fs.writeFile(path.join(t.root, "bin/systemctl"), `#!/bin/bash
+echo 'sensitive diagnostic: SECRET' >&2
+if [ "$2" = disable ]; then exit 4; fi
+if [ "$2" = daemon-reload ]; then exit 6; fi
+exit 0
+`, { mode: 0o755 });
+  const entry = { ...wake(t, buildSpec({ when: "1h" })), prompt: "SECRET prompt" };
+  const { units } = schedule(entry, () => "");
+  const run = runWake(t, entry, units[0]);
+  assert.equal(run.status, 1);
+  assert.ok(await exists(path.join(t.root, "pi.json")));
+  const logs = await fs.readdir(path.join(t.dir, "logs"));
+  const output = await fs.readFile(path.join(t.dir, "logs", logs[0]), "utf8");
+  assert.match(output, /cleanup.*disable.*4/i);
+  assert.match(output, /cleanup.*daemon-reload.*6/i);
+  assert.match(output, /final.*(?:status|exit).*1/i);
+  assert.doesNotMatch(output, /SECRET/);
+});
+
+test("cleanup file failures retain the execution status and identify the operation", async () => {
+  const t = await setup();
+  await fs.writeFile(path.join(t.root, "bin/rm"), `#!/bin/bash
+case "$*" in *.timer*) echo 'SECRET' >&2; exit 13;; esac
+exec /bin/rm "$@"
+`, { mode: 0o755 });
   const entry = wake(t, buildSpec({ when: "1h" }));
   const { units } = schedule(entry, () => "");
-  assert.notEqual(runWake(t, entry, units[0], { SYSTEMCTL_STATUS: "1" }).status, 0);
-  assert.ok(await exists(path.join(t.root, "pi.json")));
+  assert.equal(runWake(t, entry, units[0], { PI_STATUS: "42" }).status, 42);
+  const logs = await fs.readdir(path.join(t.dir, "logs"));
+  const output = await fs.readFile(path.join(t.dir, "logs", logs[0]), "utf8");
+  assert.match(output, /cleanup remove unit files failed \(exit 13\)/);
+  assert.match(output, /final status 42/);
+  assert.doesNotMatch(output, /SECRET/);
+  assert.ok(await exists(path.join(t.dir, entry.id + ".json")));
+});
+
+test("absent or empty optional string fields preserve legacy defaults", async () => {
+  const t = await setup();
+  for (const fields of [{}, { cwd: "", model: "" }]) {
+    const entry: ScheduleEntry = { ...wake(t), cwd: undefined, ...fields };
+    const { units } = schedule(entry, () => "");
+    assert.equal(runWake(t, entry, units[0]).status, 0);
+    const call = JSON.parse(await fs.readFile(path.join(t.root, "pi.json"), "utf8"));
+    assert.equal(call.cwd, t.home);
+    assert.deepEqual(call.args, ["--session", entry.session, "--print", "--", entry.prompt]);
+    assert.equal(await fs.readFile(path.join(t.root, "timeout"), "utf8"), "1800");
+  }
+});
+
+test("falsey invalid sidecar fields fail without running Pi or cleaning the one-shot", async () => {
+  const t = await setup();
+  for (const [field, value] of [["cwd", false], ["cwd", []], ["cwd", null], ["model", false], ["model", null], ["timeoutMinutes", 0], ["timeoutMinutes", false], ["timeoutMinutes", null]] as const) {
+    const entry = wake(t, buildSpec({ when: "1h" }));
+    const { units } = schedule(entry, () => "");
+    const side = path.join(t.dir, entry.id + ".json");
+    await fs.writeFile(side, JSON.stringify({ ...entry, [field]: value }));
+    assert.notEqual(runWake(t, entry, units[0]).status, 0, `${field}: ${JSON.stringify(value)}`);
+    assert.equal(await exists(path.join(t.root, "pi.json")), false);
+    assert.ok(await exists(side));
+    assert.ok(await exists(path.join(t.units, units[0] + ".timer")));
+  }
 });
 
 test("a lock command failure is not reported as a busy session", async () => {
