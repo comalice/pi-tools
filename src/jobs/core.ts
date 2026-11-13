@@ -85,10 +85,18 @@ function reconcile(db: DatabaseSync, r: Row): Row {
   const missing = props.LoadState === "not-found";
   const replaced = !missing && props.Description !== `pi-owned-job ${r.token}`;
   if (!missing && !replaced && props.ControlGroup && !r.cgroup_path) {
-    // Verify the path exists before retaining it as evidence for later stop checks.
-    cgroupPopulated(props.ControlGroup, undefined, false);
-    db.prepare("UPDATE jobs SET cgroup_path=? WHERE id=? AND token=? AND cgroup_path IS NULL").run(props.ControlGroup, r.id, r.token);
-    r = row(db, r.id);
+    // Verify the path exists before retaining it as evidence for later stop
+    // checks. A fast job's cgroup can vanish between systemctl and this read;
+    // that is teardown, not an error — skip retaining and reconcile below.
+    let verified = true;
+    try { cgroupPopulated(props.ControlGroup, undefined, false); } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      verified = false;
+    }
+    if (verified) {
+      db.prepare("UPDATE jobs SET cgroup_path=? WHERE id=? AND token=? AND cgroup_path IS NULL").run(props.ControlGroup, r.id, r.token);
+      r = row(db, r.id);
+    }
   }
   if (missing || replaced || ["inactive", "failed"].includes(props.ActiveState)) {
     // A unit state alone does not prove that its process tree is gone.
@@ -166,7 +174,12 @@ export function stopJob(id: string, options: Options = {}): Job {
           if (r.cgroup_path && !cgroupPopulated(r.cgroup_path)) return convert(db, r);
           throw new Error("cannot verify the historical job's process tree; cleanup is unconfirmed");
         }
-        const populated = cgroupPopulated(props.ControlGroup, undefined, false);
+        let populated: boolean;
+        try { populated = cgroupPopulated(props.ControlGroup, undefined, false); } catch (e) {
+          // The cgroup vanished between systemctl and this read: nothing to stop.
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+          populated = false;
+        }
         db.prepare("UPDATE jobs SET cgroup_path=? WHERE id=? AND token=?").run(props.ControlGroup, id, r.token);
         if (populated) {
           db.prepare("UPDATE jobs SET cancel_requested=1 WHERE id=? AND token=?").run(id, r.token);

@@ -37,10 +37,12 @@ export function runJobOperation<T = unknown>(operation: JobOperation, input?: un
       stdio: ["pipe", "ignore", "pipe"],
       env: { ...process.env, NODE_OPTIONS: "" },
     });
-    if (child.error) throw child.error;
+    // Wrap spawn failures (ENOENT, EPIPE on a child that never reads stdin,
+    // timeout kills) so callers get a stable, attributable message.
+    if (child.error) throw new Error(`jobs CLI subprocess failed: ${child.error.message}`);
     if (child.status !== 0) {
       const stderr = child.stderr?.toString().trim();
-      throw new Error(stderr || `jobs CLI exited ${child.status}`);
+      throw new Error(stderr || `jobs CLI exited ${child.status ?? child.signal}`);
     }
     return JSON.parse(readFileSync(resultPath, "utf8")) as T;
   } finally {

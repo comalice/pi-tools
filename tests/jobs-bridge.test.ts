@@ -65,7 +65,7 @@ test("bridge tolerates a printing NODE_OPTIONS hook and rejects a bad PI_JOBS_NO
     assert.deepEqual(runJobOperation<Job[]>("list", { group: "bridge-test" }).length, 2);
 
     process.env.PI_JOBS_NODE = "/bin/false";
-    assert.throws(() => runJobOperation("list"), /exited 1/);
+    assert.throws(() => runJobOperation("list"), /jobs CLI/);
   } finally {
     if (originalOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = originalOptions;
     if (originalNode === undefined) delete process.env.PI_JOBS_NODE; else process.env.PI_JOBS_NODE = originalNode;
