@@ -3,8 +3,8 @@
 Prerequisites (the payload scripts assume all of these): a systemd **user**
 session, `pi` at `/usr/bin/pi` (wakes exec that absolute path — symlink if
 your install lives elsewhere), `python3`, and for notifications `notify-send`
-plus a session D-Bus (`/run/user/<uid>/bus`). Wake failures surface only in
-`~/.pi/agent/schedule/logs/`.
+plus a session D-Bus (`/run/user/<uid>/bus`). Wake output is stored in the
+schedule directory's `logs/`; service failures are also reported to systemd.
 
 `extensions/schedule.ts` gives agents four tools over a shared core
 (`src/schedule/core.ts`): `schedule_notification` (desktop alert),
@@ -17,15 +17,37 @@ plus a session D-Bus (`/run/user/<uid>/bus`). Wake failures surface only in
 - **Schedule shapes**: `when` (ISO or relative `90s/30m/2h/1d`), `times`
   (2–8 firings), `recurring` (daily/weekly/hourly/monthly, `HH:MM`, or an
   OnCalendar spec — validated by `systemd-analyze calendar`, not by hand).
-- **Self-cleaning**: one-shot units remove themselves and their sidecar
-  after firing; multi-up entries clean the sidecar after the final firing;
-  recurring items persist until `cancel_scheduled`.
-- **Wake safety**: one wake per session at a time (`flock`; busy sessions
-  skip and log), `timeout` cap (default 30 min, max 240), stale
-  `node_modules/.bin` PATH entries stripped, logs under
-  `~/.pi/agent/schedule/logs/`.
+- **Self-cleaning**: one-shot and multi-up units attempt to remove themselves
+  and their sidecar after firing; recurring items persist until
+  `cancel_scheduled`.
+- **Wake safety**: one scheduled wake per session at a time (`flock`; busy
+  wakes skip, log and exit 75), `timeout` cap (default 30 min, max 240), stale
+  `node_modules/.bin` PATH entries stripped, full output under the schedule
+  directory's `logs/`. The lock does not detect interactive Pi sessions or
+  other processes that do not use it.
 - **Calendar validation authority is systemd** — do not hand-validate
   OnCalendar grammar in code.
+
+Wakes pass the stored session ID and prompt as separate Pi arguments and run in
+the saved session cwd. A missing saved cwd fails the wake rather than selecting
+a different project. Legacy entries without a cwd use the service's inherited
+cwd. Pi resolves the session ID; the scheduler does not independently verify
+which session Pi opens. Prompts starting with `@` are rejected because Pi can
+interpret them as file arguments. NUL bytes are not supported in arguments.
+
+A fired one-shot or multi-up unit is cleaned up after success, Pi failure,
+timeout or a busy skip. Recurring units remain scheduled. Pi's exit status
+(including timeout status 124) is returned; cleanup failures also fail an
+otherwise successful service. Invalid sidecars fail without cleanup. Concurrent
+multi-up firings can leave an orphaned sidecar; cleanup is not transactional.
+Busy skips are not queued or retried and can lose a wake. There is no durable
+or exactly-once delivery or acknowledgment.
+
+The shared payload is refreshed when a new item is scheduled in that registry;
+already-installed three-argument wake units remain compatible and use the
+standard `~/.config/systemd/user` cleanup path. Existing custom-unit-directory
+three-argument units need manual cleanup or recreation; newly created units
+record that directory. No installed units or sidecars are migrated automatically.
 
 ## Managed jobs
 
@@ -104,17 +126,21 @@ subscriptions, are rejected. Terminal events are records only, not wake
 requests or acknowledgments. Poll job status with an appropriate existing
 scheduler if needed. `schedule_wake` skips busy sessions and is not a durable
 completion delivery mechanism. In particular, do not treat a scheduled wake
-as acknowledgment of a terminal event. Existing scheduled wake and
-notification behavior is unchanged. A future durable delivery mechanism must
+as acknowledgment of a terminal event. A future durable delivery mechanism must
 persist pending events, retry bounded attempts across contention and restart,
 expose failures, and require explicit acknowledgment or cancellation; its
 consumer must be idempotent because execution cannot be exactly once.
 
 ## Tests
 
-Run `npm test`. `tests/jobs.test.ts` and `tests/jobs-review.test.ts` use
-private temporary registries and real uniquely named transient user services
-when a user manager is available. They do not call a model or alter scheduled
+Run `npm test`. `tests/schedule-wake.test.ts` runs generated wake payloads
+with an isolated home, registry and stubbed external commands; it never invokes
+Pi. It checks
+arguments, cwd, output, timeouts, busy skips and cleanup. The generated units
+are also checked with `systemd-analyze verify`, but the test does not start
+those units through a real user manager. `tests/jobs.test.ts` and
+`tests/jobs-review.test.ts` use private temporary registries and real uniquely
+named transient user services when a user manager is available. They do not call a model or alter scheduled
 wakes. They check launch deduplication, argv,
 permissions, exit and cancellation including SIGTERM-resistant descendants,
 group selection, fresh-process status,

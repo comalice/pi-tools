@@ -128,8 +128,16 @@ export function renderTimer(spec: ScheduleSpec, serviceName: string): string {
   return ["[Unit]", "Description=pi scheduled item", "", "[Timer]", ...lines, "Persistent=true", "", "[Install]", "WantedBy=timers.target", ""].join("\n");
 }
 
-export function renderService(script: string, dir: string, entryId: string, unitBase: string): string {
-  return ["[Unit]", "Description=pi scheduled item", "", "[Service]", "Type=oneshot", `ExecStart=${script} ${dir} ${entryId} ${unitBase}`, ""].join("\n");
+export function renderService(script: string, dir: string, entryId: string, unitBase: string, wakeUnitsDir?: string): string {
+  // Systemd expands specifiers and environment variables even inside quotes.
+  const quote = (arg: string) => {
+    if (/[\x00-\x1f\x7f]/.test(arg)) throw new Error("control characters are not allowed in unit arguments");
+    return `"${arg.replace(/%/g, "%%").replace(/\$/g, "$$$$").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  };
+  const args = wakeUnitsDir === undefined
+    ? `${script} ${dir} ${entryId} ${unitBase}`
+    : `/bin/bash ${[script, dir, entryId, unitBase, wakeUnitsDir].map(quote).join(" ")}`;
+  return ["[Unit]", "Description=pi scheduled item", "", "[Service]", "Type=oneshot", `ExecStart=${args}`, ""].join("\n");
 }
 
 export const NOTIFY_SCRIPT = `#!/bin/bash
@@ -153,37 +161,79 @@ systemctl --user daemon-reload >/dev/null 2>&1
 `;
 
 export const WAKE_SCRIPT = `#!/bin/bash
-# pi scheduled session wake payload. One wake per session at a time; one-shot items self-clean.
+# pi scheduled session wake payload. Existing units pass three arguments.
 set -u
+umask 077
 DIR="$1"; ID="$2"; UNIT="$3"
+UNITS_DIR="\${4:-$HOME/.config/systemd/user}"
 SIDE="$DIR/$ID.json"
-read -r SESSION PROMPT MODEL TIMEOUT CWD < <(python3 -c "
-import json, base64
-d = json.load(open('$SIDE'))
-print(d['session'], base64.b64encode(d['prompt'].encode()).decode(), d.get('model') or '', d.get('timeoutMinutes') or 30, base64.b64encode((d.get('cwd') or '').encode()).decode())"
-CWD=$(echo "$CWD" | base64 -d)
-if [ -n "$CWD" ] && [ -d "$CWD" ]; then cd "$CWD"; fi)
-PROMPT=$(echo "$PROMPT" | base64 -d)
-LOCK="$DIR/wake-$SESSION.lock"
-exec 9>"$LOCK"
-if ! flock -n 9; then
-  echo "$(date -Is) wake $ID skipped: session $SESSION busy" >> "$DIR/logs/$ID.log"
-  exit 0
-fi
-mkdir -p "$DIR/logs"
-ENV_PATH=$(echo "$PATH" | tr ':' '\\n' | grep -v 'node_modules/.bin' | paste -sd:)
+mkdir -p "$DIR/logs" || exit 1
 OUT="$DIR/logs/$ID-$(date +%s).log"
-echo "$(date -Is) wake $ID: resuming $SESSION" >> "$OUT"
-if [ -n "$MODEL" ]; then MODEL_ARGS=(--model "$MODEL"); else MODEL_ARGS=(); fi
-PATH="$ENV_PATH" timeout "$((TIMEOUT * 60))" /usr/bin/pi --session "$SESSION" --print "\${MODEL_ARGS[@]}" "$PROMPT" >> "$OUT" 2>&1
-echo "$(date -Is) wake $ID: exit $?" >> "$OUT"
-if python3 -c "import json,sys; sys.exit(0 if json.load(open('$SIDE'))['spec']['type']=='recurring' else 1)"; then exit 0; fi
-systemctl --user disable --now "$UNIT.timer" >/dev/null 2>&1
-rm -f "$HOME/.config/systemd/user/$UNIT.timer" "$HOME/.config/systemd/user/$UNIT.service"
-if ! ls "$HOME/.config/systemd/user/" | grep -q "^pi-wake-$ID"; then
-  rm -f "$SIDE"
+FIELDS=$(mktemp "$DIR/.wake-fields.XXXXXXXX") || exit 1
+trap 'rm -f "$FIELDS"' EXIT
+# NUL framing preserves empty fields, whitespace and trailing newlines.
+if ! python3 - "$SIDE" > "$FIELDS" <<'PYTHON'
+import json, re, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    d = json.load(f)
+session = d['session']
+prompt = d['prompt']
+model = d.get('model') or ''
+timeout = d.get('timeoutMinutes') or 30
+cwd = d.get('cwd') or ''
+kind = d['spec']['type']
+if (not isinstance(session, str) or not re.fullmatch(r'[0-9a-zA-Z_-]{8,80}', session)
+    or not isinstance(prompt, str) or not prompt.strip() or prompt.startswith('@')
+    or not isinstance(model, str) or not isinstance(cwd, str)
+    or type(timeout) is not int or not 1 <= timeout <= 240
+    or kind not in ('once', 'multi', 'recurring')
+    or any('\\0' in s for s in (session, prompt, model, cwd))):
+    raise ValueError('invalid wake payload')
+for value in (session, prompt, model, str(timeout), cwd, kind):
+    sys.stdout.buffer.write(value.encode('utf-8') + b'\\0')
+PYTHON
+then
+  echo "$(date -Is) wake $ID: invalid payload" >> "$OUT"
+  exit 1
 fi
-systemctl --user daemon-reload >/dev/null 2>&1
+mapfile -d '' -t FIELDS_ARRAY < "$FIELDS"
+if [ "\${#FIELDS_ARRAY[@]}" -ne 6 ]; then exit 1; fi
+SESSION="\${FIELDS_ARRAY[0]}"; PROMPT="\${FIELDS_ARRAY[1]}"; MODEL="\${FIELDS_ARRAY[2]}"
+TIMEOUT="\${FIELDS_ARRAY[3]}"; CWD="\${FIELDS_ARRAY[4]}"; KIND="\${FIELDS_ARRAY[5]}"
+rm -f "$FIELDS"
+LOCK="$DIR/wake-$SESSION.lock"
+exec 9>"$LOCK" || exit 1
+STATUS=0
+LOCK_STATUS=0
+flock -n -E 75 9 || LOCK_STATUS=$?
+if [ "$LOCK_STATUS" -eq 75 ]; then
+  echo "$(date -Is) wake $ID skipped: session $SESSION busy" >> "$DIR/logs/$ID.log"
+  STATUS=75
+elif [ "$LOCK_STATUS" -ne 0 ]; then
+  echo "$(date -Is) wake $ID: lock failed: $LOCK_STATUS" >> "$OUT"
+  STATUS=$LOCK_STATUS
+elif [ -n "$CWD" ] && ! cd -- "$CWD"; then
+  echo "$(date -Is) wake $ID: cannot enter cwd: $CWD" >> "$OUT"
+  STATUS=1
+else
+  ENV_PATH=$(echo "$PATH" | tr ':' '\\n' | grep -v 'node_modules/.bin' | paste -sd:)
+  echo "$(date -Is) wake $ID: resuming $SESSION" >> "$OUT"
+  if [ -n "$MODEL" ]; then MODEL_ARGS=(--model "$MODEL"); else MODEL_ARGS=(); fi
+  PATH="$ENV_PATH" timeout "$((TIMEOUT * 60))" /usr/bin/pi --session "$SESSION" --print "\${MODEL_ARGS[@]}" -- "$PROMPT" >> "$OUT" 2>&1 || STATUS=$?
+  echo "$(date -Is) wake $ID: exit $STATUS" >> "$OUT"
+fi
+if [ "$KIND" != recurring ]; then
+  systemctl --user disable --now "$UNIT.timer" >/dev/null 2>&1 || { [ "$STATUS" -ne 0 ] || STATUS=1; }
+  rm -f "$UNITS_DIR/$UNIT.timer" "$UNITS_DIR/$UNIT.service" || { [ "$STATUS" -ne 0 ] || STATUS=1; }
+  # Only remove the registry entry after every sibling unit has gone.
+  shopt -s nullglob
+  siblings=("$UNITS_DIR/pi-wake-$ID"-[0-9]*.timer "$UNITS_DIR/pi-wake-$ID"-[0-9]*.service)
+  if [ ! -e "$UNITS_DIR/pi-wake-$ID.timer" ] && [ ! -e "$UNITS_DIR/pi-wake-$ID.service" ] && [ "\${#siblings[@]}" -eq 0 ]; then
+    rm -f "$SIDE" || { [ "$STATUS" -ne 0 ] || STATUS=1; }
+  fi
+  systemctl --user daemon-reload >/dev/null 2>&1 || { [ "$STATUS" -ne 0 ] || STATUS=1; }
+fi
+exit "$STATUS"
 `;
 
 function ensurePayloadScripts(dir: string): { notifyScript: string; wakeScript: string } {
@@ -202,9 +252,14 @@ export function validateEntry(entry: ScheduleEntry): void {
     if (entry.message.length > MAX_MESSAGE) throw new Error(`message must be <= ${MAX_MESSAGE} chars`);
     if (entry.title && entry.title.length > 120) throw new Error("title must be <= 120 chars");
   } else {
+    if (!/^w-[0-9a-f-]{4,12}$/.test(entry.id)) throw new Error("invalid wake id");
     if (typeof entry.session !== "string" || !/^[0-9a-zA-Z_-]{8,80}$/.test(entry.session)) throw new Error("session must be a session id");
     if (typeof entry.prompt !== "string" || !entry.prompt.trim()) throw new Error("prompt is required");
     if (entry.prompt.length > MAX_PROMPT) throw new Error(`prompt must be <= ${MAX_PROMPT} chars`);
+    if (entry.prompt.startsWith("@")) throw new Error("prompt cannot start with @ (Pi treats it as a file argument)");
+    for (const value of [entry.prompt, entry.model, entry.cwd]) {
+      if (value !== undefined && (typeof value !== "string" || value.includes("\0"))) throw new Error("wake fields must be strings without NUL characters");
+    }
     if (entry.timeoutMinutes !== undefined && (!Number.isInteger(entry.timeoutMinutes) || entry.timeoutMinutes < 1 || entry.timeoutMinutes > 240)) {
       throw new Error("timeoutMinutes must be 1–240");
     }
@@ -221,7 +276,8 @@ export function schedule(entry: ScheduleEntry, exec: Exec): { id: string; units:
       throw new Error(`invalid calendar spec "${entry.spec.calendar}": ${(error as Error).message.split("\n")[0]}`);
     }
   }
-  const dir = scheduleDir();
+  const dir = path.resolve(scheduleDir());
+  const unitDir = path.resolve(unitsDir());
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const scripts = ensurePayloadScripts(dir);
   const script = entry.kind === "notification" ? scripts.notifyScript : scripts.wakeScript;
@@ -232,8 +288,8 @@ export function schedule(entry: ScheduleEntry, exec: Exec): { id: string; units:
     entry.spec.type === "multi" ? entry.spec.ats.map((at, i) => ({ suffix: `-${i + 1}`, spec: { type: "once", at } as ScheduleSpec })) : [{ suffix: "", spec: entry.spec }];
   for (const { suffix, spec } of specs) {
     const base = unitName(entry, suffix);
-    writeFileSync(path.join(unitsDir(), `${base}.timer`), renderTimer(spec, `${base}.service`), { mode: 0o644 });
-    writeFileSync(path.join(unitsDir(), `${base}.service`), renderService(script, dir, entry.id, base), { mode: 0o644 });
+    writeFileSync(path.join(unitDir, `${base}.timer`), renderTimer(spec, `${base}.service`), { mode: 0o644 });
+    writeFileSync(path.join(unitDir, `${base}.service`), renderService(script, dir, entry.id, base, entry.kind === "wake" ? unitDir : undefined), { mode: 0o644 });
     units.push(base);
   }
   exec("systemctl", ["--user", "daemon-reload"]);
