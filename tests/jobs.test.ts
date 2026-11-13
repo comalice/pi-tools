@@ -12,10 +12,14 @@ const ids: string[] = [];
 const options = { dir };
 let available = false;
 try { execFileSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }); available = true; } catch {}
+function units(id: string) {
+  const output = execFileSync("systemctl", ["--user", "list-units", "--all", "--plain", "--no-legend", `pi-owned-job-${id}*.service`], { encoding: "utf8" });
+  return output.trim().split("\n").filter(Boolean).map(line => line.trim().split(/\s+/)[0]);
+}
 after(() => {
-  for (const id of ids) {
-    try { execFileSync("systemctl", ["--user", "stop", `pi-owned-job-${id}.service`], { stdio: "ignore" }); } catch {}
-    try { execFileSync("systemctl", ["--user", "reset-failed", `pi-owned-job-${id}.service`], { stdio: "ignore" }); } catch {}
+  if (available) for (const id of ids) for (const unit of units(id)) {
+    try { execFileSync("systemctl", ["--user", "stop", unit], { stdio: "ignore" }); } catch {}
+    try { execFileSync("systemctl", ["--user", "reset-failed", unit], { stdio: "ignore" }); } catch {}
   }
   rmSync(dir, { recursive: true, force: true });
 });
@@ -147,7 +151,7 @@ test("an existing same-named unit is not adopted or stopped", { skip: !available
   const job = id();
   execFileSync("systemd-run", ["--user", "--quiet", `--unit=pi-owned-job-${job}.service`, "--property=Type=exec", "/bin/sleep", "60"]);
   const result = launchJob({ id: job, group: "collision", argv: ["/bin/true"], cwd: dir }, options);
-  assert.equal(result.state, "interrupted");
+  assert.notEqual(result.state, "interrupted");
   stopJob(job, options);
   assert.match(execFileSync("systemctl", ["--user", "is-active", `pi-owned-job-${job}.service`], { encoding: "utf8" }), /active/);
 });
@@ -155,7 +159,8 @@ test("an existing same-named unit is not adopted or stopped", { skip: !available
 test("missing live unit is interrupted, not successful", { skip: !available }, async () => {
   const job = id();
   launchJob({ id: job, group: "project-c", argv: ["/bin/sleep", "60"], cwd: dir }, options);
-  execFileSync("systemctl", ["--user", "kill", "--kill-whom=all", "--signal=KILL", `pi-owned-job-${job}.service`]);
+  const [name] = units(job);
+  execFileSync("systemctl", ["--user", "kill", "--kill-whom=all", "--signal=KILL", name]);
   const status = await until(() => jobStatus(job, options), s => s.state === "interrupted");
   assert.equal(status.exitCode, null);
   assert.deepEqual(status.terminalEvent, { jobId: job, group: "project-c", status: "interrupted", finished: status.finished });

@@ -34,10 +34,16 @@ plus a session D-Bus (`/run/user/<uid>/bus`). Wake failures surface only in
 argv with an absolute executable, and an absolute working directory (the
 session cwd by default). Reuse the same UUID and identical inputs when
 retrying a launch. A different input under the same UUID is rejected. To stop
-jobs in one group, list that group and stop selected IDs individually. Only
-registered jobs whose systemd identity matches the registry are controlled.
-This is an accidental-collision safeguard, not isolation from other processes
-running as the same user.
+jobs in one group, list that group and stop selected IDs individually. New
+unit names include a random generation as well as the job ID, and the unit's
+description is checked against the registry before a stop. This prevents
+ordinary ID-only collisions, not deliberate interference by the same user.
+Systemd's name-based stop does not atomically check the generation or
+invocation identity: another same-user process can replace the exact unit
+after the check and before the stop, causing the replacement to be stopped.
+Do not use `job_stop` when a concurrent actor may replace these units. Older
+registry entries retain their original ID-only unit names and are particularly
+susceptible to accidental collisions.
 
 Each command runs under a transient systemd user service, with
 `KillMode=control-group`, a three-second stop timeout before systemd escalates,
@@ -53,21 +59,38 @@ on reboot. Logs, the SQLite registry and historical outcomes are under
 private. Logs and the database are private; they can contain sensitive data.
 There is currently no automatic retention or cleanup.
 
-The runner records a command's exit code or signal. A requested stop retains
-history and stops the service cgroup. If the runner disappears or the unit is
-missing or replaced before an exit is recorded, status reports `interrupted`,
-not success. Status reconciles with systemd; if the manager cannot be queried,
-the operation fails rather than guessing. A launch reservation is committed
-before starting the unit, so retrying after an interrupted launch cannot start
-the command again. A reservation left in `launching` is reconciled after 30
-seconds; stop may ask for a retry during this interval. Start errors can be
+The runner records a command's exit code or signal only after the service
+cgroup and nested cgroups contain no other processes. A background worker can
+therefore keep a job running after the foreground command exits. This requires
+readable cgroup v2 membership at `/sys/fs/cgroup`; if it cannot be inspected,
+the runner waits instead of reporting completion. The guarantee covers the
+service cgroup, not processes that deliberately move to another service or
+cgroup. A requested stop commits its intent before invoking systemd and reports
+`cancelled` only after the recorded cgroup is empty or gone. An uncertain stop
+may raise an error while preserving the intent, or reconcile as `interrupted`
+if ownership or cleanup cannot be established. If the runner disappears or the
+unit is missing or replaced before an exit is recorded, status reports
+`interrupted`, not success. Status reconciles with systemd; if the manager
+cannot be queried, the operation fails rather than guessing. A launch reservation is committed
+before starting the unit, and the runner atomically claims execution before
+spawning; retries and manual service restarts cannot start it again. A crash
+after the claim but before spawn sacrifices execution rather than risking a
+duplicate. Existing reservations are conservatively treated as claimed on
+migration, including unfinished ones. A reservation left in `launching` is
+reconciled after 30 seconds; stop may ask for a retry during this interval. Start errors can be
 ambiguous and are reported in status. If the user manager stops at reboot,
 incomplete jobs are reconciled as interrupted on the next query. Each recorded
 terminal transition atomically creates one `terminalEvent`, returned by
 `job_status` and `job_list`, with job ID, group, status and finish time. A
 terminal event is not proof of success; inspect the job state and exit details.
-Duplicate status or stop requests retain the same event. Existing terminal
-records are backfilled when the registry is opened. An unexpected interruption
+The runner retries SQLite lock contention while it remains alive; a crash,
+forced stop, non-lock database error, reboot or storage failure can still lose
+an exit that was not committed. Legacy terminal records predate cgroup-aware
+completion; `job_stop` attempts identity-checked cleanup of their surviving
+cgroup and refuses to claim cleanup when it cannot establish the tree is gone.
+Their original terminal event is retained. Duplicate status or stop requests
+retain the same event. Existing terminal records are backfilled when the
+registry is opened. An unexpected interruption
 is recorded only when a later status/list/stop operation reconciles it; there is
 no background recovery. No process or reboot fault-injection test proves every
 filesystem failure scenario.
@@ -89,10 +112,13 @@ consumer must be idempotent because execution cannot be exactly once.
 
 ## Tests
 
-Run `npm test`. `tests/jobs.test.ts` uses a temporary private registry and
-real transient user services when a user manager is available. It does not
-call a model or alter scheduled wakes. It checks launch deduplication, argv,
+Run `npm test`. `tests/jobs.test.ts` and `tests/jobs-review.test.ts` use
+private temporary registries and real uniquely named transient user services
+when a user manager is available. They do not call a model or alter scheduled
+wakes. They check launch deduplication, argv,
 permissions, exit and cancellation including SIGTERM-resistant descendants,
 group selection, fresh-process status,
-missing units, unit-name collisions and terminal-event snapshots. It does not
+missing units, unit-name collisions, cgroup completion, service restart, SQLite
+contention, interrupted cancellation, and terminal-event snapshots. The
+exact-name replacement race is a known failing TODO test. The tests do not
 test reboot, delivery attempts or durable completion delivery.
