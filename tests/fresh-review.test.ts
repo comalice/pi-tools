@@ -12,7 +12,8 @@ describe("fresh review worker", () => {
 		const result = await runFreshReview({ label: "check", task: "Review only" }, worker(script));
 		assert.equal(result.ok, true);
 		const { args, input }: { args: string[]; input: string } = JSON.parse(result.output);
-		for (const flag of ["--no-session", "--no-extensions", "--no-skills", "--no-mcp"]) assert.ok(args.includes(flag));
+		for (const flag of ["--no-session", "--no-extensions", "--no-skills"]) assert.ok(args.includes(flag));
+		assert.ok(!args.includes("--no-mcp"));
 		assert.equal(args[args.indexOf("--tools") + 1], "read,grep,find,ls");
 		assert.ok(input.includes("Review only"));
 		assert.ok(!args.includes("Review only"));

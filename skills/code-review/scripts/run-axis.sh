@@ -39,7 +39,7 @@ if [ -n "${PI_REVIEW_MODEL:-}" ]; then
   MODEL_ARGS=(--model "$PI_REVIEW_MODEL")
 fi
 
-pi --print --no-session --no-skills --no-extensions --no-mcp \
+pi --print --no-session --no-skills --no-extensions \
   --tools read,bash \
   "${MODEL_ARGS[@]}" \
   "Read $WORKDIR/prompt.md and follow its instructions exactly." \

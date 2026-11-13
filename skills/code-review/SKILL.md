@@ -66,7 +66,7 @@ Run all three with a single bash invocation using `&` and `wait`, writing to `.s
 - `references/spec-brief.md` — `{{SPEC}}` (path or fetched contents), `{{TOOLING_RESULTS}}`.
 - `references/adversarial-brief.md` — `{{TOOLING_RESULTS}}`.
 
-`run-axis.sh` captures the diff and commit list itself, launches `pi -p` with `--no-session --no-skills --no-extensions --no-mcp`, and restricts tools to `read,bash`. Sub-agents therefore **cannot** rediscover this skill or load other project machinery — this is the harness-level guard against recursive fan-out. Set `PI_REVIEW_MODEL` to override the model used by axis processes (a cheaper model is often fine; match the model to the task, not to your ego).
+`run-axis.sh` captures the diff and commit list itself, launches `pi -p` with `--no-session --no-skills --no-extensions`, and restricts tools to `read,bash`. Disabling extensions also disables built-in MCP; the tool allowlist excludes other tools. These restrictions prevent recursive fan-out. Set `PI_REVIEW_MODEL` to override the model used by axis processes (a cheaper model is often fine; match the model to the task, not to your ego).
 
 Skip the Spec axis if no spec exists. If an axis process fails, report its failure in place of its findings — never silently drop an axis.
 
