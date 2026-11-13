@@ -91,10 +91,12 @@ execution, not shell interpolation. Explicitly invoking a shell is possible
 and makes its script the caller's responsibility. The service inherits the
 systemd user manager's environment, which may differ from the Pi process.
 It requires a user systemd manager, `systemd-run` with
-`--expand-environment=no`, and the installed Node executable and this package
-remaining available. Services are independent of Pi but are not restarted
-on reboot. Logs, the SQLite registry and historical outcomes are under
-`PI_JOBS_DIR` (default `~/.pi/agent/jobs`), which must be user-owned and
+`--expand-environment=no`. The Pi tools invoke the jobs CLI with
+`node --experimental-strip-types`, and its service runner uses that Node
+executable. Keep `node` on Pi's `PATH` and this package at its installed path.
+Services are independent of Pi but are not restarted on reboot. Logs, the
+SQLite registry and historical outcomes are under `PI_JOBS_DIR` (default
+`~/.pi/agent/jobs`), which must be user-owned and
 private. Logs and the database are private; they can contain sensitive data.
 There is currently no automatic retention or cleanup.
 

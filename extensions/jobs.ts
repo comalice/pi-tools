@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { jobStatus, launchJob, listJobs, stopJob } from "../src/jobs/core.ts";
+import { runJobOperation } from "../src/jobs/bridge.ts";
 
 function result(value: unknown) {
   const text = JSON.stringify(value, null, 2);
@@ -17,24 +17,24 @@ export default function (pi: ExtensionAPI) {
       argv: Type.Array(Type.String(), { minItems: 1, maxItems: 256, description: "Executable and arguments; executable must be an absolute path." }),
       cwd: Type.Optional(Type.String({ description: "Absolute working directory; defaults to the current session cwd." })),
     }, { additionalProperties: false }),
-    async execute(_id, p, _signal, _update, ctx) { return result(launchJob({ ...p, cwd: p.cwd ?? ctx.sessionManager.getCwd() })); },
+    async execute(_id, p, _signal, _update, ctx) { return result(runJobOperation("launch", { ...p, cwd: p.cwd ?? ctx.sessionManager.getCwd() })); },
   });
   pi.registerTool({
     name: "job_list", label: "List Managed Jobs",
     description: "List owned jobs, including historical outcomes, optionally filtered by project/group.",
     parameters: Type.Object({ group: Type.Optional(Type.String()) }),
-    async execute(_id, p) { return result(listJobs(p.group)); },
+    async execute(_id, p) { return result(runJobOperation("list", p)); },
   });
   pi.registerTool({
     name: "job_status", label: "Managed Job Status",
     description: "Get an owned job's state, terminal event, exit status, error and log path; missing service evidence is interrupted, not success. Terminal events are not delivered as wakes.",
     parameters: Type.Object({ id: Type.String() }),
-    async execute(_id, p) { return result(jobStatus(p.id)); },
+    async execute(_id, p) { return result(runJobOperation("status", p)); },
   });
   pi.registerTool({
     name: "job_stop", label: "Stop Managed Job",
     description: "Stop one owned job's systemd cgroup, retaining history. Systemd stop is name-based and can stop a replacement unit if another same-user process replaces it between verification and stop; do not use when such interference is possible. Use job_list to select a group and stop jobs individually.",
     parameters: Type.Object({ id: Type.String() }),
-    async execute(_id, p) { return result(stopJob(p.id)); },
+    async execute(_id, p) { return result(runJobOperation("stop", p)); },
   });
 }
