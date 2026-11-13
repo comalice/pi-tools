@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { jobStatus, launchJob, listJobs, stopJob } from "./core.ts";
 import type { JobInput } from "./core.ts";
 
@@ -14,13 +14,19 @@ function run(request: Request) {
     case "list": return listJobs(request.input?.group);
     case "status": return jobStatus(request.input?.id);
     case "stop": return stopJob(request.input?.id);
-    default: throw new Error(`unknown jobs operation: ${request.operation}`);
+    default: throw new Error(`unknown jobs operation: ${(request as Request).operation}`);
   }
+}
+
+const resultPath = process.argv[2];
+if (!resultPath) {
+  console.error("usage: cli.ts <result-path> (request JSON on stdin)");
+  process.exit(2);
 }
 
 try {
   const request = JSON.parse(readFileSync(0, "utf8")) as Request;
-  process.stdout.write(JSON.stringify(run(request)));
+  writeFileSync(resultPath, JSON.stringify(run(request)), { mode: 0o600 });
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

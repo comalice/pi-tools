@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -13,7 +13,11 @@ const originalJobsDir = process.env.PI_JOBS_DIR;
 process.env.PI_JOBS_DIR = dir;
 const ids = [randomUUID(), randomUUID()];
 let available = false;
-try { execFileSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }); available = true; } catch {}
+try {
+  execFileSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" });
+  execFileSync("node", ["--experimental-strip-types", "-e", ""], { stdio: "ignore" });
+  available = true;
+} catch {}
 
 after(() => {
   if (available) {
@@ -50,4 +54,20 @@ test("Node bridge launches and observes a managed job", { skip: !available }, as
   runJobOperation("launch", { id: runningId, group: "bridge-test", argv: ["/bin/sleep", "30"], cwd: dir });
   assert.equal(runJobOperation<Job>("stop", { id: runningId }).state, "cancelled");
   assert.equal(runJobOperation<Job[]>("list", { group: "bridge-test" }).length, 2);
+});
+
+test("bridge tolerates a printing NODE_OPTIONS hook and rejects a bad PI_JOBS_NODE", { skip: !available }, () => {
+  const hook = path.join(dir, "hook.cjs");
+  writeFileSync(hook, "console.log('BANNER-NOISE');");
+  const originalOptions = process.env.NODE_OPTIONS, originalNode = process.env.PI_JOBS_NODE;
+  try {
+    process.env.NODE_OPTIONS = `--require ${hook}`;
+    assert.deepEqual(runJobOperation<Job[]>("list", { group: "bridge-test" }).length, 2);
+
+    process.env.PI_JOBS_NODE = "/bin/false";
+    assert.throws(() => runJobOperation("list"), /exited 1/);
+  } finally {
+    if (originalOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = originalOptions;
+    if (originalNode === undefined) delete process.env.PI_JOBS_NODE; else process.env.PI_JOBS_NODE = originalNode;
+  }
 });
