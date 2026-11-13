@@ -33,7 +33,7 @@ export default function (pi: ExtensionAPI) {
   });
   pi.registerTool({
     name: "job_stop", label: "Stop Managed Job",
-    description: "Stop one owned job's entire systemd cgroup, retaining history. Use job_list to select a group and then stop its jobs by id.",
+    description: "Stop one owned job's systemd cgroup, retaining history. Systemd stop is name-based and can stop a replacement unit if another same-user process replaces it between verification and stop; do not use when such interference is possible. Use job_list to select a group and stop jobs individually.",
     parameters: Type.Object({ id: Type.String() }),
     async execute(_id, p) { return result(stopJob(p.id)); },
   });
