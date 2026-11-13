@@ -32,6 +32,7 @@ test("managed lifecycle, argv quoting, history, duplicate id and groups", { skip
   assert.equal(first.id, job.id);
   const completed = await until(() => jobStatus(job.id, options), s => s.state === "succeeded");
   assert.equal(completed.exitCode, 0);
+  assert.deepEqual(completed.terminalEvent, { jobId: job.id, group: job.group, status: "succeeded", finished: completed.finished });
   assert.match(readFileSync(completed.log, "utf8"), /\$\(echo unsafe\) 'a b'/);
   assert.equal(launchJob(job, options).id, first.id);
   assert.throws(() => launchJob({ ...job, argv: ["/bin/false"] }, options), /conflict/i);
@@ -59,13 +60,16 @@ test("concurrent duplicate launches start only once", { skip: !available }, asyn
 test("failure and process-group cancellation retain evidence", { skip: !available }, async () => {
   const failed = id();
   launchJob({ id: failed, group: "project-b", argv: ["/bin/sh", "-c", "exit 23"], cwd: dir }, options);
-  assert.equal((await until(() => jobStatus(failed, options), s => s.state === "failed")).exitCode, 23);
+  const failure = await until(() => jobStatus(failed, options), s => s.state === "failed");
+  assert.equal(failure.exitCode, 23);
+  assert.deepEqual(failure.terminalEvent, { jobId: failed, group: "project-b", status: "failed", finished: failure.finished });
   const running = id();
   launchJob({ id: running, group: "project-b", argv: ["/bin/sleep", "60"], cwd: dir }, options);
   stopJob(running, options);
   const stopped = await until(() => jobStatus(running, options), s => s.state === "cancelled");
   assert.equal(stopped.state, "cancelled");
-  assert.equal(stopJob(running, options).state, "cancelled");
+  assert.deepEqual(stopped.terminalEvent, { jobId: running, group: "project-b", status: "cancelled", finished: stopped.finished });
+  assert.deepEqual(stopJob(running, options).terminalEvent, stopped.terminalEvent);
   assert.equal(listJobs("project-b", options).length, 2);
 });
 
@@ -80,7 +84,10 @@ test("spawn failure is recorded and stopping one group member leaves another run
   launchJob({ id: b, group: "other", argv: ["/bin/sleep", "60"], cwd: dir }, options);
   assert.deepEqual(listJobs("select", options).map(j => j.id).sort(), [missing, a].sort());
   assert.equal(stopJob(a, options).state, "cancelled");
-  assert.equal(jobStatus(b, options).state, "running");
+  const other = jobStatus(b, options);
+  assert.equal(other.state, "running");
+  assert.equal(other.terminalEvent, null);
+  assert.equal(listJobs("select", options).some(j => j.id === b), false);
   stopJob(b, options);
 });
 
@@ -99,10 +106,12 @@ test("status is durable across a fresh process and duplicates never rerun", { sk
   const marker = path.join(dir, "runs");
   const input = { id: job, group: "restart", argv: [process.execPath, "-e", "require('fs').appendFileSync(process.argv[1], 'x')", marker], cwd: dir };
   launchJob(input, options);
-  await until(() => jobStatus(job, options), s => s.state === "succeeded");
+  const original = await until(() => jobStatus(job, options), s => s.state === "succeeded");
   const moduleUrl = new URL("../src/jobs/core.ts", import.meta.url).href;
-  const script = `import {launchJob,jobStatus} from ${JSON.stringify(moduleUrl)}; launchJob(${JSON.stringify(input)}, {dir:${JSON.stringify(dir)}}); console.log(jobStatus(${JSON.stringify(job)}, {dir:${JSON.stringify(dir)}}).state);`;
-  assert.match(execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { encoding: "utf8" }), /succeeded/);
+  const script = `import {launchJob,jobStatus} from ${JSON.stringify(moduleUrl)}; launchJob(${JSON.stringify(input)}, {dir:${JSON.stringify(dir)}}); console.log(JSON.stringify(jobStatus(${JSON.stringify(job)}, {dir:${JSON.stringify(dir)}})));`;
+  const restarted = JSON.parse(execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { encoding: "utf8" }));
+  assert.equal(restarted.state, "succeeded");
+  assert.deepEqual(restarted.terminalEvent, original.terminalEvent);
   assert.equal(readFileSync(marker, "utf8"), "x");
 });
 
@@ -129,6 +138,7 @@ test("invalid input and unowned ids are rejected", () => {
   assert.throws(() => stopJob(randomUUID(), options), /not found/i);
   assert.throws(() => launchJob({ id: id(), group: "bad group", argv: ["/bin/true"], cwd: dir }, options), /group/i);
   assert.throws(() => launchJob({ id: id(), group: "x", argv: ["true"], cwd: dir }, options), /absolute/i);
+  assert.throws(() => launchJob({ id: id(), group: "x", argv: ["/bin/true"], cwd: dir, completion: { session: "session-1", prompt: "wake" } } as any, options), /unsupported/i);
   const unsafe = mkdtempSync(path.join(os.tmpdir(), "pi-jobs-unsafe-"));
   try { chmodSync(unsafe, 0o755); assert.throws(() => listJobs(undefined, { dir: unsafe }), /private/); } finally { rmSync(unsafe, { recursive: true, force: true }); }
 });
@@ -148,4 +158,6 @@ test("missing live unit is interrupted, not successful", { skip: !available }, a
   execFileSync("systemctl", ["--user", "kill", "--kill-whom=all", "--signal=KILL", `pi-owned-job-${job}.service`]);
   const status = await until(() => jobStatus(job, options), s => s.state === "interrupted");
   assert.equal(status.exitCode, null);
+  assert.deepEqual(status.terminalEvent, { jobId: job, group: "project-c", status: "interrupted", finished: status.finished });
+  assert.deepEqual(jobStatus(job, options).terminalEvent, status.terminalEvent);
 });

@@ -16,7 +16,7 @@ export default function (pi: ExtensionAPI) {
       group: Type.String({ description: "Project/group label (letters, digits, dot, underscore, hyphen)." }),
       argv: Type.Array(Type.String(), { minItems: 1, maxItems: 256, description: "Executable and arguments; executable must be an absolute path." }),
       cwd: Type.Optional(Type.String({ description: "Absolute working directory; defaults to the current session cwd." })),
-    }),
+    }, { additionalProperties: false }),
     async execute(_id, p, _signal, _update, ctx) { return result(launchJob({ ...p, cwd: p.cwd ?? ctx.sessionManager.getCwd() })); },
   });
   pi.registerTool({
@@ -27,7 +27,7 @@ export default function (pi: ExtensionAPI) {
   });
   pi.registerTool({
     name: "job_status", label: "Managed Job Status",
-    description: "Get an owned job's state, exit status, error and log path; missing service evidence is interrupted, not success.",
+    description: "Get an owned job's state, terminal event, exit status, error and log path; missing service evidence is interrupted, not success. Terminal events are not delivered as wakes.",
     parameters: Type.Object({ id: Type.String() }),
     async execute(_id, p) { return result(jobStatus(p.id)); },
   });

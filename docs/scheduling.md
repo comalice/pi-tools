@@ -62,14 +62,23 @@ before starting the unit, so retrying after an interrupted launch cannot start
 the command again. A reservation left in `launching` is reconciled after 30
 seconds; stop may ask for a retry during this interval. Start errors can be
 ambiguous and are reported in status. If the user manager stops at reboot,
-incomplete jobs are reconciled as interrupted on the next query. No process
-or reboot fault-injection test proves every filesystem failure scenario.
+incomplete jobs are reconciled as interrupted on the next query. Each recorded
+terminal transition atomically creates one `terminalEvent`, returned by
+`job_status` and `job_list`, with job ID, group, status and finish time. A
+terminal event is not proof of success; inspect the job state and exit details.
+Duplicate status or stop requests retain the same event. Existing terminal
+records are backfilled when the registry is opened. An unexpected interruption
+is recorded only when a later status/list/stop operation reconciles it; there is
+no background recovery. No process or reboot fault-injection test proves every
+filesystem failure scenario.
 
 ## Completion wake limitation
 
 Managed-job completion wakes are **not implemented**. Launch does not accept
 session or prompt fields, and there is no delivery, acknowledgment, retry or
-delivery-failure status. Poll job status with an appropriate existing
+delivery-failure status. Unknown launch fields, including completion
+subscriptions, are rejected. Terminal events are records only, not wake
+requests or acknowledgments. Poll job status with an appropriate existing
 scheduler if needed. `schedule_wake` skips busy sessions and is not a durable
 completion delivery mechanism. In particular, do not treat a scheduled wake
 as acknowledgment of a terminal event. Existing scheduled wake and
@@ -85,5 +94,5 @@ real transient user services when a user manager is available. It does not
 call a model or alter scheduled wakes. It checks launch deduplication, argv,
 permissions, exit and cancellation including SIGTERM-resistant descendants,
 group selection, fresh-process status,
-missing units and unit-name collisions. It does not test reboot or durable
-completion delivery.
+missing units, unit-name collisions and terminal-event snapshots. It does not
+test reboot, delivery attempts or durable completion delivery.
