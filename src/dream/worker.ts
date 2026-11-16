@@ -264,7 +264,7 @@ export type Generate = (model: string, prompt: string) => Promise<string>;
 // is the last (positional) argument. No MCP-off flag: the current pi CLI has
 // no such option and would exit as an unknown option before running.
 export function piSpawnArgs(model: string, prompt: string): string[] {
-  return ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-tools", "--model", model, prompt];
+  return ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-mcp", "--no-tools", "--model", model, prompt];
 }
 
 export const piGenerate: Generate = (model, prompt) => new Promise((resolve, reject) => {

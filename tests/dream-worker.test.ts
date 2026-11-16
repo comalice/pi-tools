@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { chunkMessages, digestClaude, digestGrok, digestPi, extractJsonArray, extractionPrompt, runWorker, validateExtractions } from "../src/dream/worker.ts";
+import { chunkMessages, digestClaude, digestGrok, digestPi, extractJsonArray, extractionPrompt, piSpawnArgs, runWorker, validateExtractions } from "../src/dream/worker.ts";
 import { parsePage } from "../src/wiki/format.ts";
 import { DatabaseSync } from "node:sqlite";
 
@@ -167,14 +167,13 @@ describe("dream worker harness", () => {
     assert.ok(page.meta.tags.includes("process"));
   });
 
-  it("pins the pi spawn args: print mode, no session/skills/extensions/tools, and no --no-mcp", () => {
+  it("pins the pi spawn args: print mode, no session/skills/extensions/mcp/tools", () => {
     const args = piSpawnArgs("gladiator/nemotron-3-super", "the prompt");
-    for (const flag of ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-tools"]) {
+    for (const flag of ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-mcp", "--no-tools"]) {
       assert.ok(args.includes(flag), `missing ${flag}`);
     }
     assert.equal(args[args.indexOf("--model") + 1], "gladiator/nemotron-3-super");
     assert.equal(args[args.length - 1], "the prompt");
-    assert.ok(!args.includes("--no-mcp"), "the pi CLI rejects --no-mcp as an unknown option");
   });
 
   it("threads origin into the extraction prompt only when provided", async () => {
