@@ -5,9 +5,9 @@
 # session, no skills (the sub-agent cannot rediscover the code-review skill),
 # no extensions or MCP servers, no context files (the reviewed repo's
 # AGENTS.md/CLAUDE.md must not reach the reviewer's system context), tools
-# restricted to read+bash, capped at 30 minutes when a coreutils timeout
-# binary is available. This is the harness-level guard against recursive
-# agent fan-out.
+# restricted to read+bash, capped at $AXIS_TIMEOUT_SECONDS (default 30
+# minutes) when a coreutils timeout binary is available. This is the
+# harness-level guard against recursive agent fan-out.
 #
 # PI_REVIEW_MODEL overrides the model for axis processes.
 set -euo pipefail
@@ -43,11 +43,13 @@ CMD=(pi --print --no-session --no-skills --no-extensions --no-context-files --to
 if [ -n "${PI_REVIEW_MODEL:-}" ]; then
   CMD+=(--model "$PI_REVIEW_MODEL")
 fi
-# Cap the run at 30 minutes when a coreutils timeout binary exists; run bare
-# when it does not (macOS ships `gtimeout` via brew coreutils, not `timeout`).
+# Cap the run at $AXIS_TIMEOUT_SECONDS (default 30 minutes) when a timeout
+# binary exists; run uncapped when neither exists. macOS ships neither
+# `timeout` nor `gtimeout` — gtimeout comes from `brew install coreutils`.
+TIMEOUT_SECONDS="${AXIS_TIMEOUT_SECONDS:-1800}"
 if command -v timeout >/dev/null 2>&1; then
-  CMD=(timeout 1800 "${CMD[@]}")
+  CMD=(timeout "$TIMEOUT_SECONDS" "${CMD[@]}")
 elif command -v gtimeout >/dev/null 2>&1; then
-  CMD=(gtimeout 1800 "${CMD[@]}")
+  CMD=(gtimeout "$TIMEOUT_SECONDS" "${CMD[@]}")
 fi
 "${CMD[@]}" "Read $WORKDIR/prompt.md and follow its instructions exactly." > "$OUT"

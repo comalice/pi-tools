@@ -13,7 +13,7 @@ export interface ReviewOptions {
 }
 
 const OUTPUT_LIMIT = 24_000;
-const LINE_LIMIT = 1_000_000;
+const LINE_LIMIT = 8_000_000;
 const STDERR_LIMIT = 8_000;
 
 function emptyUsage(): ReviewUsage {
@@ -70,9 +70,9 @@ export async function runFreshReview(task: ReviewTask, options: ReviewOptions): 
 			let end: number;
 			while ((end = buffer.indexOf("\n")) >= 0) {
 				const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-				// Oversized lines are dropped, never parsed: the only record we
-				// extract (assistant message_end) is bounded by model output, while
-				// agent_end carries the whole run and is large by design.
+				// Oversized lines are dropped, never parsed: a single model
+				// message cannot approach 8M chars, while agent_end
+				// transcripts can — and agent_end is the record we drop.
 				if (line.length > LINE_LIMIT) continue;
 				consume(line);
 			}
