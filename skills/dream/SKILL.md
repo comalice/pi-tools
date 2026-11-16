@@ -32,12 +32,21 @@ front-end links to the active run automatically).
    The systemd `pi-memory-ingest.timer` normally keeps this current.
 
 2. **Launch or attach.** Preferred: the systemd unit
-   `systemctl --user start pi-dream.service` (30-day window, nemotron, 3
-   parallel, resumes existing state). Ad hoc:
-   `npm run dream` or `node --experimental-strip-types <repo>/src/dream/runner.ts
-   --since 7d --model gladiator/nemotron-3-super --parallel 3`.
-   Only Pi and Claude sources are processed — OpenCode sessions have no
-   readable raw files and are reported as skipped.
+   `systemctl --user start pi-dream.service`, which sweeps the full archive
+   history (the unit passes `--since 2020-01-01`, model
+   gladiator/nemotron-3-super, 3 parallel) and resumes existing state. Ad
+   hoc: `npm run dream` or
+   `node --experimental-strip-types <repo>/src/dream/runner.ts
+   --since 7d --model gladiator/nemotron-3-super --parallel 3`; the runner
+   defaults are a 30-day window, gladiator/nemotron-3-super, 3 parallel,
+   and 500 sessions per run.
+   Pi, Claude, and OpenCode sessions are all digested. OpenCode sessions
+   have no per-session raw file: the runner resolves the registered
+   OpenCode SQLite store (the `source_config` root in the archive) and the
+   worker assembles the session from it. A session is reported as skipped —
+   "no readable session file for this source" — when the OpenCode store is
+   not registered or the store file is missing, when the archive records no
+   file for the session, or when the source has no digest (e.g. grok).
 
 3. **Monitor.** The console URL prints at startup. Progress is per-session:
    pending/running/done/failed/skipped with errors. `done` rows may carry

@@ -175,13 +175,20 @@ ${chunk.transcript}`;
 
 export type Generate = (model: string, prompt: string) => Promise<string>;
 
+// Single-turn model call: no session, no skills/extensions/tools. The prompt
+// is the last (positional) argument. No MCP-off flag: the current pi CLI has
+// no such option and would exit as an unknown option before running.
+export function piSpawnArgs(model: string, prompt: string): string[] {
+  return ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-tools", "--model", model, prompt];
+}
+
 export const piGenerate: Generate = (model, prompt) => new Promise((resolve, reject) => {
   // npm-run prepends node_modules/.bin to PATH, where a stale bundled pi may
   // shadow the real one; strip those entries so the agent pi always wins.
   const env = { ...process.env };
   env.PATH = (env.PATH ?? "").split(":").filter((p) => !p.includes("node_modules/.bin")).join(":");
   const bin = process.env.PI_AGENT_BIN ?? "pi";
-  const child = spawn(bin, ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-mcp", "--no-tools", "--model", model, prompt], { stdio: ["ignore", "pipe", "pipe"], env });
+  const child = spawn(bin, piSpawnArgs(model, prompt), { stdio: ["ignore", "pipe", "pipe"], env });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
