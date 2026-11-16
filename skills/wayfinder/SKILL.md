@@ -118,7 +118,7 @@ User invokes with a loose idea.
 2. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surfacing the open decisions and the first steps takeable now. **If this surfaces no fog** (the way to the destination is already clear, the whole journey small enough for one session), you don't need a map. Stop and ask the user how they'd like to proceed.
 3. **Create the map**: `.scratch/maps/<map-slug>/README.md` with Destination and Notes filled in, Decisions-so-far empty, the fog sketched into **Not yet specified**.
 4. **Create the tickets you can specify now** as sibling files, then wire blocking edges in a **second pass** (files need names before they can reference each other). Wiring sorts them into the frontier and the blocked; everything you can't yet specify stays in the fog.
-5. **Fire the research runs.** For each `research` ticket you just created, resolve it with the `research` skill (inline, or as a headless run with a fresh context), capturing findings on a throwaway `research/<name>` branch with a pointer from the ticket. The branch is never merged.
+5. **Fire the research runs.** For each `research` ticket you just created, resolve it with the `research` skill (inline, or as a headless run with a fresh context), capturing the findings in a git-tracked file under `.scratch/research/<name>.md`, with a pointer from the ticket.
 6. Commit, then stop: charting is one session's work; it hand-resolves nothing.
 
 ### Work through the map

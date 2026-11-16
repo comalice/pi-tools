@@ -27,7 +27,7 @@ Prompt each run with a separate technical brief (file paths, coupling details, d
 - Agent 3: "Optimise for the most common caller: make the default case trivial."
 - Agent 4 (if applicable): "Design around ports & adapters for cross-seam dependencies."
 
-Include both [SKILL.md](SKILL.md) vocabulary and GLOSSARY.md vocabulary in the brief so each run names things consistently with the architecture language and the project's domain language.
+Include the [SKILL.md](SKILL.md) vocabulary in the brief, plus the repo's `GLOSSARY.md` vocabulary if it exists, so each run names things consistently with the architecture language and the project's domain language.
 
 Each run outputs:
 

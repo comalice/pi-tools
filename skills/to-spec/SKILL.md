@@ -8,7 +8,7 @@ metadata:
 
 This skill takes the current conversation context and codebase understanding and produces a spec. Do NOT interview the user; just synthesize what you already know.
 
-Specs live in the repo at `.scratch/specs/<slug>.md`, git-tracked. Tickets derived from a spec live beside it under `.scratch/<slug>/issues/` (see the `to-tickets` skill).
+Specs live in the repo at `.scratch/specs/<slug>.md`, git-tracked. Tickets derived from a spec live under `.scratch/maps/<slug>/` (see the `wayfinder` skill).
 
 ## Process
 

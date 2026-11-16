@@ -1,11 +1,11 @@
 ---
 name: research
-description: Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent.
+description: Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a headless pi run.
 metadata:
-  upstream: mattpocock/skills@4ae2317ddb
+  upstream: "mattpocock/skills@4ae2317ddb (adapted: the legwork runs as a headless pi process in the background)"
 ---
 
-Spin up a **background agent** to do the research, so you keep working while it reads. Start it with a fresh context window.
+Spin up a **headless pi process** in the background (e.g. `pi --print --no-session` with a self-describing brief) to do the research, so you keep working while it reads. It starts with a fresh context window.
 
 Its job:
 
