@@ -46,7 +46,8 @@ front-end links to the active run automatically).
    worker assembles the session from it. A session is reported as skipped —
    "no readable session file for this source" — when the OpenCode store is
    not registered or the store file is missing, when the archive records no
-   file for the session, or when the source has no digest (e.g. grok).
+   file for the session, when the archive records a file that no longer
+   exists on disk, or when the source has no digest (e.g. grok).
 
 3. **Monitor.** The console URL prints at startup. Progress is per-session:
    pending/running/done/failed/skipped with errors. `done` rows may carry
