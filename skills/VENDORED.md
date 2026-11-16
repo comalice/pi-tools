@@ -11,12 +11,12 @@ The following skills are adapted from [mattpocock/skills](https://github.com/mat
 | tdd | "Skill tool" → load `codebase-design`; code-review pointer reworded — refactoring/fixes happen after the review reports its findings |
 | diagnosing-bugs | verbatim |
 | codebase-design | parallel sub-agents → sequential/headless designs; GLOSSARY.md reference guarded in DESIGN-IT-TWICE |
-| domain-modeling | verbatim |
+| domain-modeling | ADR offer criteria consolidated in ADR-FORMAT.md; the SKILL.md section is a pointer |
 | prototype | verbatim |
 | research | background agent → headless pi run |
 | retro | verbatim (AGENTS.md guidance applies as-is) |
 | handoff | "Skill tool" → `/skill:<name>`; argument-hint line removed (pi appends skill arguments regardless) |
-| teach | argument-hint line removed (pi appends skill arguments regardless) |
+| teach | argument-hint line removed (pi appends skill arguments regardless); GLOSSARY-FORMAT.md pointers added (it was referenced nowhere) |
 | wait-what | GLOSSARY.md reference guarded for repos without one |
 | writing-for-agents | verbatim |
 | wizard | verbatim |

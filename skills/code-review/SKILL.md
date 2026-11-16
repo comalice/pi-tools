@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along three axes: Standards (does the diff follow this repo's documented coding standards?), Spec (does it implement what the originating issue/spec asked for?), and Adversarial Bugs (null paths, races, off-by-one, error handling, security). Each axis runs in a fresh, isolated headless pi sub-process and findings are reported side by side, never merged. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to 'review since X'."
+description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along three axes — Standards, Spec, Adversarial Bugs. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to 'review since X'."
 ---
 
 Three-axis review of the diff between `HEAD` and a fixed point the user supplies:
