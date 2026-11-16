@@ -2,7 +2,7 @@
 name: tdd
 description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
 metadata:
-  upstream: mattpocock/skills@4ae2317ddb
+  upstream: "mattpocock/skills@4ae2317ddb (adapted: code-review pointer reworded — refactoring happens after the code-review skill reports its findings on the finished diff, matching this repo's code-review skill)"
 ---
 
 # Test-Driven Development

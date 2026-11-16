@@ -8,7 +8,7 @@ A pi session on any of the user's machines gets the full memory/wiki tool surfac
 
 - Domain: dirac-pi-tools memory/wiki/entity/dream stack (see `docs/memory.md`, `docs/wiki.md`, `docs/scheduling.md`).
 - **This map carries execution.** Decisions were settled up front by grilling (see Decisions so far); tickets are build/ops work, not open questions.
-- Skills to consult: `tdd` (every build ticket), `codebase-design` (seam choices), `implement` + `to-tickets` if a ticket needs further slicing, `code-review` at ticket close.
+- Skills to consult: `tdd` (every build ticket), `codebase-design` (seam choices), `implement` (per ticket; slice further into wayfinder tickets when one is too big), `code-review` at ticket close.
 - Standing preferences:
   - **Transport/binding is a deployment seam.** Nothing in the app layer assumes Nebula, loopback, or any particular topology; bind address and tokens are per-deployment config. A future managed-service target (TLS, public ingress, tenancy) must be possible without redesign.
   - Derived state never crosses machines: Qdrant vectors, mentions sidecar, dossiers, staging, dream state, session summaries are hub-local and rebuildable from source.
