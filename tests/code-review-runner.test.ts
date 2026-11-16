@@ -35,16 +35,25 @@ const dir = match[1];
 console.log(JSON.stringify({ args, prompt: fs.readFileSync(dir + '/prompt.md', 'utf8'), diff: fs.readFileSync(dir + '/diff.patch', 'utf8'), commits: fs.readFileSync(dir + '/commits.txt', 'utf8') }));
 `);
 		chmodSync(pi, 0o755);
+		// PI_REVIEW_MODEL is unset (not empty): the script must launch pi
+		// without --model, exercising the empty-argument path.
+		const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+		delete env.PI_REVIEW_MODEL;
 		const out = join(repo, "output.md");
-		const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_REVIEW_MODEL: "" };
 		execFileSync("bash", [runner, "HEAD~1", join(repo, "brief.md"), out], { cwd: repo, env });
 		const result = JSON.parse(readFileSync(out, "utf8"));
-		for (const flag of ["--print", "--no-session", "--no-skills", "--no-extensions"]) assert.ok(result.args.includes(flag));
+		for (const flag of ["--print", "--no-session", "--no-skills", "--no-extensions", "--no-context-files"]) assert.ok(result.args.includes(flag));
 		assert.ok(!result.args.includes("--no-mcp"));
+		assert.ok(!result.args.includes("--model"));
 		assert.equal(result.args[result.args.indexOf("--tools") + 1], "read,bash");
 		assert.match(result.prompt, /Review the diff/);
 		assert.match(result.diff, /\+after/);
 		assert.match(result.commits, /second/);
+		const modelOut = join(repo, "model-output.md");
+		execFileSync("bash", [runner, "HEAD~1", join(repo, "brief.md"), modelOut], { cwd: repo, env: { ...env, PI_REVIEW_MODEL: "test/model" } });
+		const modelResult = JSON.parse(readFileSync(modelOut, "utf8"));
+		assert.equal(modelResult.args[modelResult.args.indexOf("--model") + 1], "test/model");
+		assert.ok(modelResult.args.includes("--no-context-files"));
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

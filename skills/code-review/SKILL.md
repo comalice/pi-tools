@@ -66,7 +66,7 @@ Run all three with a single bash invocation using `&` and `wait`, writing to `.s
 - `references/spec-brief.md` — `{{SPEC}}` (path or fetched contents), `{{TOOLING_RESULTS}}`.
 - `references/adversarial-brief.md` — `{{TOOLING_RESULTS}}`.
 
-`run-axis.sh` captures the diff and commit list itself, launches `pi -p` with `--no-session --no-skills --no-extensions`, and restricts tools to `read,bash`. Disabling extensions also disables built-in MCP; the tool allowlist excludes other tools. These restrictions prevent recursive fan-out. Set `PI_REVIEW_MODEL` to override the model used by axis processes (a cheaper model is often fine; match the model to the task, not to your ego).
+`run-axis.sh` captures the diff and commit list itself, launches `pi -p` with `--no-session --no-skills --no-extensions --no-context-files`, and restricts tools to `read,bash`. Disabling extensions also disables built-in MCP; `--no-context-files` keeps the reviewed repo's AGENTS.md/CLAUDE.md out of the reviewer's system context; the tool allowlist excludes other tools. Each axis is capped at 30 minutes via coreutils `timeout` (or `gtimeout` on macOS) when one is available. These restrictions prevent recursive fan-out; the full contract is in the Isolation contract section. Set `PI_REVIEW_MODEL` to override the model used by axis processes (a cheaper model is often fine; match the model to the task, not to your ego).
 
 Skip the Spec axis if no spec exists. If an axis process fails, report its failure in place of its findings — never silently drop an axis.
 
@@ -90,3 +90,7 @@ When a finding names a mistake class the repo will make again, offer to encode i
 - A new rule in `CODING_STANDARDS.md` (or equivalent) when it needs judgement — the Standards axis reads that file next run.
 
 Never give the same review feedback three times. The first time you flag it, the second time you automate it.
+
+## Isolation contract
+
+This repo runs read-only review workers in two places, and their flags and tool allowlists are one contract: the axis workers launched by `scripts/run-axis.sh` and the `fresh_review` tool's workers (`src/fresh-review.ts`). Both launch with `--no-session --no-skills --no-extensions --no-context-files`; the axis allowlist is `read,bash` and the `fresh_review` allowlist is `read,grep,find,ls`. The two flag sets and the two allowlists must change together — if one worker gains or loses a flag or a tool, change the other and this paragraph. This paragraph is the source of truth for both harnesses.

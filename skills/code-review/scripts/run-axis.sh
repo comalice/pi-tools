@@ -3,8 +3,11 @@
 #
 # Runs one review axis as an isolated headless pi process: fresh context, no
 # session, no skills (the sub-agent cannot rediscover the code-review skill),
-# no extensions or MCP servers, tools restricted to read+bash. This is the
-# harness-level guard against recursive agent fan-out.
+# no extensions or MCP servers, no context files (the reviewed repo's
+# AGENTS.md/CLAUDE.md must not reach the reviewer's system context), tools
+# restricted to read+bash, capped at 30 minutes when a coreutils timeout
+# binary is available. This is the harness-level guard against recursive
+# agent fan-out.
 #
 # PI_REVIEW_MODEL overrides the model for axis processes.
 set -euo pipefail
@@ -34,13 +37,17 @@ git -C "$REPO_ROOT" log "$POINT"..HEAD --oneline > "$WORKDIR/commits.txt"
   printf '\nRead the diff and commit list first, then review. Write your report to stdout and nothing else.\n'
 } > "$WORKDIR/prompt.md"
 
-MODEL_ARGS=()
+# Single command array, always non-empty: no empty-array expansion, so this
+# is safe on bash 3.2 under `set -u` with or without PI_REVIEW_MODEL.
+CMD=(pi --print --no-session --no-skills --no-extensions --no-context-files --tools read,bash)
 if [ -n "${PI_REVIEW_MODEL:-}" ]; then
-  MODEL_ARGS=(--model "$PI_REVIEW_MODEL")
+  CMD+=(--model "$PI_REVIEW_MODEL")
 fi
-
-pi --print --no-session --no-skills --no-extensions \
-  --tools read,bash \
-  "${MODEL_ARGS[@]}" \
-  "Read $WORKDIR/prompt.md and follow its instructions exactly." \
-  > "$OUT"
+# Cap the run at 30 minutes when a coreutils timeout binary exists; run bare
+# when it does not (macOS ships `gtimeout` via brew coreutils, not `timeout`).
+if command -v timeout >/dev/null 2>&1; then
+  CMD=(timeout 1800 "${CMD[@]}")
+elif command -v gtimeout >/dev/null 2>&1; then
+  CMD=(gtimeout 1800 "${CMD[@]}")
+fi
+"${CMD[@]}" "Read $WORKDIR/prompt.md and follow its instructions exactly." > "$OUT"

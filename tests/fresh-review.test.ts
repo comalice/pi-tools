@@ -12,7 +12,7 @@ describe("fresh review worker", () => {
 		const result = await runFreshReview({ label: "check", task: "Review only" }, worker(script));
 		assert.equal(result.ok, true);
 		const { args, input }: { args: string[]; input: string } = JSON.parse(result.output);
-		for (const flag of ["--no-session", "--no-extensions", "--no-skills"]) assert.ok(args.includes(flag));
+		for (const flag of ["--no-session", "--no-extensions", "--no-skills", "--no-context-files"]) assert.ok(args.includes(flag));
 		assert.ok(!args.includes("--no-mcp"));
 		assert.equal(args[args.indexOf("--tools") + 1], "read,grep,find,ls");
 		assert.ok(input.includes("Review only"));
@@ -50,6 +50,16 @@ describe("fresh review worker", () => {
 		assert.equal(result.ok, true);
 		assert.equal(result.truncated, true);
 		assert.match(result.output, /Output truncated/);
+	});
+
+	it("drops an oversized line instead of killing a completed run", async () => {
+		// Pi's --mode json ends with an agent_end record carrying every message
+		// and tool result of the run, so it is routinely >1MB on a thorough
+		// review. The final assistant message_end arrives before it.
+		const script = `${event({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "final report" }] })}\nconsole.log(JSON.stringify({type:'agent_end',transcript:'x'.repeat(1500000)}));`;
+		const result = await runFreshReview({ label: "check", task: "Review" }, worker(script));
+		assert.equal(result.ok, true);
+		assert.equal(result.output, "final report");
 	});
 
 	it("terminates timed-out and cancelled workers", async () => {
