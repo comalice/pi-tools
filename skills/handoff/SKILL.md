@@ -3,7 +3,7 @@ name: handoff
 description: Compact the current conversation into a handoff document for another agent to pick up.
 disable-model-invocation: true
 metadata:
-  upstream: mattpocock/skills@4ae2317ddb
+  upstream: "mattpocock/skills@4ae2317ddb (adapted: non-pi argument-hint field removed)"
 ---
 
 Write a handoff document summarising the current conversation so a fresh agent can continue the work. Save to the temporary directory of the user's OS (`$TMPDIR`, else `/tmp`; `%TEMP%` on Windows) - not the current workspace.

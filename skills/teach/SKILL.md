@@ -3,7 +3,7 @@ name: teach
 description: Teach the user a new skill or concept, within this workspace.
 disable-model-invocation: true
 metadata:
-  upstream: mattpocock/skills@4ae2317ddb
+  upstream: "mattpocock/skills@4ae2317ddb (adapted: GLOSSARY-FORMAT.md pointer added; non-pi argument-hint field removed)"
 ---
 
 The user has asked you to teach them something. This is a stateful request - they intend to learn the topic over multiple sessions.
@@ -13,7 +13,7 @@ The user has asked you to teach them something. This is a stateful request - the
 Treat the current directory as a teaching workspace. Workspace paths (`./lessons/` and the rest) resolve from the directory `/teach` was run in; only the `*-FORMAT.md` links resolve from this skill's folder. The state of their learning is captured in this directory in several files:
 
 - `MISSION.md`: A document capturing the _reason_ the user is interested in the topic. This should be used to ground all teaching. Use the format in [MISSION-FORMAT.md](./MISSION-FORMAT.md).
-- `GLOSSARY.md`: The canonical language for the workspace. Every lesson, reference, and learning record should adhere to its terminology. Use the format in [GLOSSARY-FORMAT.md](./GLOSSARY-FORMAT.md).
+- `GLOSSARY.md` (only for topics with their own nomenclature): The canonical language for the workspace. Every lesson, reference, and learning record should adhere to its terminology. Use the format in [GLOSSARY-FORMAT.md](./GLOSSARY-FORMAT.md).
 - `./reference/*.html`: A directory of reference materials. These are the compressed learnings from the lessons - cheat sheets, reference algorithms, syntax, yoga poses, glossaries. They are the raw units of learning. They should be beautiful documents which print out well, and are designed for quick reference.
 - `RESOURCES.md`: A list of resources which can be explored to ground your teaching in contextual knowledge, or to acquire knowledge and wisdom. Use the format in [RESOURCES-FORMAT.md](./RESOURCES-FORMAT.md).
 - `./learning-records/*.md`: A directory of learning records, which capture what the user has learned. These are loosely equivalent to architectural decision records in software development - they capture non-obvious lessons and key insights that may need to be revised later, or drive future sessions. These should be used to calculate the zone of proximal development. They are titled `0001-<dash-case-name>.md`, where the number increments each time. Use the format in [LEARNING-RECORD-FORMAT.md](./LEARNING-RECORD-FORMAT.md).

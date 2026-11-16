@@ -9,7 +9,7 @@ Audit the requested documentation against the evidence. This is a **read-only re
 
 ## Independent review
 
-If you are the **orchestrator**, use `fresh_review` to delegate the audit to at least one fresh, read-only worker; split genuinely independent areas into at most three tasks when the scope warrants it. Pass each worker the scope, pinned commit identifiers or relevant file paths, and the absolute path to this `SKILL.md`. Report failed or truncated workers and coverage limits; if `fresh_review` is unavailable, ask the user to reload the package or approve another method. If you are already a **worker** launched by `fresh_review` or explicitly tasked to perform a fresh review directly, follow the process below yourself.
+If you are the **orchestrator**, use `fresh_review` to delegate the audit to at least one fresh, read-only worker; split genuinely independent areas into at most three tasks when the scope warrants it. Pass each worker the scope, relevant file paths, and the absolute path to this `SKILL.md`; when the review is pinned to a commit or tag, inline the pinned file contents into the task (the worker has no git access). Report failed or truncated workers and coverage limits; if `fresh_review` is unavailable, ask the user to reload the package or approve another method. If you are already a **worker** launched by `fresh_review` or explicitly tasked to perform a fresh review directly, follow the process below yourself.
 
 Shared dispatch rules — direct review, no recursion, claim verification, unavailable-tool handling — are in [review worker](../documentation-reference/review-worker.md).
 
