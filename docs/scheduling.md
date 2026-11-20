@@ -103,11 +103,15 @@ record that directory. No installed units or sidecars are migrated automatically
 
 ## Managed jobs
 
-`extensions/jobs.ts` provides `job_launch`, `job_list`, `job_status` and
-`job_stop`. Launch requires a caller-generated lowercase UUID v4, a group,
-argv with an absolute executable, and an absolute working directory (the
-session cwd by default). Reuse the same UUID and identical inputs when
-retrying a launch. A different input under the same UUID is rejected. To stop
+`extensions/jobs.ts` provides `job_launch`, `job_list`, `job_status`, `job_stop`,
+and the worker-pipeline tools `pipeline_launch`, `pipeline_list`, `pipeline_status`,
+`pipeline_approve`, and `pipeline_cancel`. Launch requires a caller-generated
+lowercase UUID v4, a group, argv with an absolute executable, and an absolute
+working directory (the session cwd by default). Reuse the same UUID and identical
+inputs when retrying a launch. A different input under the same UUID is rejected.
+Jobs and pipelines record `ownerSession` (populated from the active Pi session);
+`job_list`, `job_stop`, and `pipeline_*` default to the caller's session scope and
+require `allSessions: true` to inspect or mutate another session's items. To stop
 jobs in one group, list that group and stop selected IDs individually. New
 unit names include a random generation as well as the job ID, and the unit's
 description is checked against the registry before a stop. This prevents
@@ -168,24 +172,59 @@ completion; `job_stop` attempts identity-checked cleanup of their surviving
 cgroup and refuses to claim cleanup when it cannot establish the tree is gone.
 Their original terminal event is retained. Duplicate status or stop requests
 retain the same event. Existing terminal records are backfilled when the
-registry is opened. An unexpected interruption
-is recorded only when a later status/list/stop operation reconciles it; there is
-no background recovery. No process or reboot fault-injection test proves every
-filesystem failure scenario.
+registry is opened. When `pi-jobs-controller.service` is running, it actively
+reconciles running/launching jobs against systemd and advances terminal
+transitions automatically; without the controller, unexpected interruptions
+are recorded on the next status/list/stop call. No process or reboot
+fault-injection test proves every filesystem failure scenario.
 
-## Completion wake limitation
+## Statechart controller & durable completion wakes
 
-Managed-job completion wakes are **not implemented**. Launch does not accept
-session or prompt fields, and there is no delivery, acknowledgment, retry or
-delivery-failure status. Unknown launch fields, including completion
-subscriptions, are rejected. Terminal events are records only, not wake
-requests or acknowledgments. Poll job status with an appropriate existing
-scheduler if needed. `schedule_wake` skips busy sessions and is not a durable
-completion delivery mechanism. In particular, do not treat a scheduled wake
-as acknowledgment of a terminal event. A future durable delivery mechanism must
-persist pending events, retry bounded attempts across contention and restart,
-expose failures, and require explicit acknowledgment or cancellation; its
-consumer must be idempotent because execution cannot be exactly once.
+`src/statechart/core.ts` provides a pure statechart transition kernel (compound
+states, parallel regions, guards, declarative effects, and `done.<region>`
+microsteps). `src/jobs/chart.ts` models each managed job as parallel
+`Execution × Delivery` regions, driven by the single-user systemd daemon
+`pi-jobs-controller.service` (`src/jobs/daemon.ts` + `src/jobs/controller.ts`,
+installed via `make install-systemd`).
+
+- **Push + active reconciliation**: `runner.ts` pokes `PI_JOBS_DIR/controller.sock`
+  (`0600`) after committing a terminal exit so the controller wakes immediately;
+  a periodic reconciler catches killed units, crashes, and reboots even if the
+  runner never poked the socket.
+- **Atomic terminal handoff**: a SQLite trigger (`jobs_terminal_delivery`)
+  atomically moves `delivery_state` from `armed` to `pending` in the same
+  transaction that commits any terminal job state, eliminating the crash window
+  between job exit and queueing delivery.
+- **Durable at-least-once delivery**: pass `wake: { session?, prompt, maxRetries?, model? }`
+  to `job_launch` (or `pipeline_launch`). The controller runs
+  `flock -n -E 75 <session-lock> timeout 30m pi --session <id> --print <prompt>`
+  sharing the schedule session lock. Busy sessions (`exit 75`) or transient
+  failures transition back to `pending` with exponential backoff up to
+  `maxRetries` (default 5). Exhausting retries transitions to `dead_lettered`
+  and fires a best-effort `notify-send` desktop alert.
+- **Crash recovery & idempotency**: on startup, the controller recovers any row
+  stuck in `delivering` as a failed attempt (retry or dead-letter). Because a
+  crash can occur after `pi` starts and before acknowledgment is persisted,
+  delivery is at-least-once and wake prompts must be idempotent. As with
+  `schedule_wake`, `flock` does not detect interactive Pi sessions.
+
+## Worker pipelines
+
+`src/jobs/pipeline-chart.ts` and `src/jobs/pipeline.ts` layer a
+`diagnose → [optional awaiting_approval] → implement → review` workflow
+statechart on the same SQLite registry (`workflows` table) and controller:
+
+- Entering each stage spawns one managed child job via `launchJob`; `implement`
+  and `review` argv entries may reference `{{diagnose.log}}`, `{{diagnose.jobId}}`,
+  `{{implement.log}}`, and `{{implement.jobId}}`.
+- Set `requireApproval: true` to pause in `awaiting_approval` after `diagnose`
+  succeeds until `pipeline_approve` is called.
+- Set `maxStageRetries` (`0–3`, default `0`) for bounded per-stage retries on
+  worker failure.
+- `pipeline_cancel` stops any active child job first and only marks the pipeline
+  `cancelled` once the child reaches a terminal state.
+- Reaching `completed`, `failed`, or `cancelled` arms one workflow-level
+  completion wake if `wake` was provided.
 
 ## Tests
 
@@ -205,5 +244,11 @@ permissions, exit and cancellation including SIGTERM-resistant descendants,
 group selection, fresh-process status,
 missing units, unit-name collisions, cgroup completion, service restart, SQLite
 contention, interrupted cancellation, and terminal-event snapshots. The
-exact-name replacement race is a known failing TODO test. The tests do not
-test reboot, delivery attempts or durable completion delivery.
+exact-name replacement race is a known failing TODO test.
+`tests/statechart.test.ts` checks the pure statechart kernel;
+`tests/jobs-controller.test.ts` checks push-driven wake delivery, busy-session
+backoff, dead-letter notification, crash recovery mid-delivery, session-scoped
+ownership, and active reconciliation; `tests/jobs-pipeline.test.ts` checks
+3-stage auto execution with log binding, approval gating, stage retries, and
+cancellation with real transient services and stubbed wake/notify handlers.
+The tests do not test reboot fault-injection or live Pi wake invocations.
