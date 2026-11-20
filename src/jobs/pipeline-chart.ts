@@ -36,6 +36,7 @@ export interface PipelineContext {
   readonly activeStage: PipelineStageName | null;
   readonly stageAttempts: number;
   readonly stages: Readonly<Partial<Record<PipelineStageName, StageRecord>>>;
+  readonly terminalState: "completed" | "failed" | "cancelled" | null;
   readonly error: string | null;
   readonly finished: string | null;
   readonly wake: WakeTarget | null;
@@ -181,6 +182,7 @@ export const pipelineChart: Chart<PipelineContext, PipelineEvent, PipelineEffect
                           activeJobId: null,
                           activeStage: null,
                           stages: recordStage(c, "diagnose", e),
+                          terminalState: "failed",
                           error: e.error ?? `diagnose stage ${e.status}`,
                           finished: e.finished,
                         };
@@ -210,6 +212,7 @@ export const pipelineChart: Chart<PipelineContext, PipelineEvent, PipelineEffect
                       ...c,
                       activeJobId: null,
                       activeStage: null,
+                      terminalState: "cancelled",
                       finished: e.type === "cancel" ? e.finished : c.finished,
                     }),
                   },
@@ -256,6 +259,7 @@ export const pipelineChart: Chart<PipelineContext, PipelineEvent, PipelineEffect
                           activeJobId: null,
                           activeStage: null,
                           stages: recordStage(c, "implement", e),
+                          terminalState: "failed",
                           error: e.error ?? `implement stage ${e.status}`,
                           finished: e.finished,
                         };
@@ -277,6 +281,7 @@ export const pipelineChart: Chart<PipelineContext, PipelineEvent, PipelineEffect
                           activeJobId: null,
                           activeStage: null,
                           stages: recordStage(c, "review", e),
+                          terminalState: "completed",
                           finished: e.finished,
                         };
                       },
@@ -304,6 +309,7 @@ export const pipelineChart: Chart<PipelineContext, PipelineEvent, PipelineEffect
                           activeJobId: null,
                           activeStage: null,
                           stages: recordStage(c, "review", e),
+                          terminalState: "failed",
                           error: e.error ?? `review stage ${e.status}`,
                           finished: e.finished,
                         };
@@ -330,6 +336,7 @@ export const pipelineChart: Chart<PipelineContext, PipelineEvent, PipelineEffect
                     activeJobId: null,
                     activeStage: null,
                     stages,
+                    terminalState: "cancelled",
                     finished: e.finished,
                   };
                 },
@@ -368,10 +375,9 @@ export const pipelineChart: Chart<PipelineContext, PipelineEvent, PipelineEffect
                   deliveryAttempts: c.deliveryAttempts + 1,
                   nextDeliveryAt: null,
                 }),
-                effects: [(c, _e) => {
-                  if (!c.wake) return null;
-                  const state = c.error ? "failed" : c.stages.review?.status === "succeeded" ? "completed" : "cancelled";
-                  return { type: "wake.deliver", workflowId: c.workflowId, attempt: c.deliveryAttempts, wake: c.wake, state };
+                effects: [(c) => {
+                  if (!c.wake || !c.terminalState) return null;
+                  return { type: "wake.deliver", workflowId: c.workflowId, attempt: c.deliveryAttempts, wake: c.wake, state: c.terminalState };
                 }],
               },
             },
@@ -400,10 +406,11 @@ export const pipelineChart: Chart<PipelineContext, PipelineEvent, PipelineEffect
                     nextDeliveryAt: null,
                     notified: true,
                   }),
-                  effects: [(c) => {
-                    const state = c.error ? "failed" : c.stages.review?.status === "succeeded" ? "completed" : "cancelled";
-                    return { type: "notify.dead_letter", workflowId: c.workflowId, group: c.group, state, error: c.lastDeliveryError };
-                  }],
+                  effects: [(c) => (
+                    c.terminalState
+                      ? { type: "notify.dead_letter", workflowId: c.workflowId, group: c.group, state: c.terminalState, error: c.lastDeliveryError }
+                      : null
+                  )],
                 },
               ],
             },
@@ -449,6 +456,7 @@ export function createPipelineSnapshot(input: {
     activeStage: "diagnose",
     stageAttempts: 1,
     stages: {},
+    terminalState: null,
     error: null,
     finished: null,
     wake: input.wake,

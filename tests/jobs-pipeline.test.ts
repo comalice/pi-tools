@@ -13,6 +13,7 @@ import {
   listPipelines,
   pipelineStatus,
 } from "../src/jobs/pipeline.ts";
+import { createPipelineSnapshot, stepPipeline } from "../src/jobs/pipeline-chart.ts";
 
 let available = false;
 try { execFileSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }); available = true; } catch {}
@@ -192,4 +193,74 @@ test("cancelling a running pipeline stops its active child and delivers cancelle
 
   await until(() => wakes.length, (n) => n === 1);
   assert.equal(wakes[0].outcome, "cancelled");
+});
+
+test("cancelling during reviewing reports cancelled (never completed) even if review exits 0", () => {
+  const wfId = randomUUID();
+  const j1 = randomUUID(), j2 = randomUUID(), j3 = randomUUID();
+  const { snapshot: s0 } = createPipelineSnapshot({
+    workflowId: wfId,
+    group: "race-cancel",
+    ownerSession: "sess-1",
+    requireApproval: false,
+    maxStageRetries: 0,
+    specs: {
+      diagnose: { argv: ["/bin/true"], cwd: "/tmp" },
+      implement: { argv: ["/bin/true"], cwd: "/tmp" },
+      review: { argv: ["/bin/true"], cwd: "/tmp" },
+    },
+    firstJobId: j1,
+    wake: { session: "sess-1", prompt: "done", cwd: "/tmp" },
+  });
+  const s1 = stepPipeline(s0, { type: "job.terminal", jobId: j1, status: "succeeded", exitCode: 0, log: "/tmp/1.log", error: null, finished: "2026-01-01T00:00:01Z", nextJobId: j2 }).snapshot;
+  const s2 = stepPipeline(s1, { type: "job.terminal", jobId: j2, status: "succeeded", exitCode: 0, log: "/tmp/2.log", error: null, finished: "2026-01-01T00:00:02Z", nextJobId: j3 }).snapshot;
+  const s3 = stepPipeline(s2, { type: "cancel", finished: "2026-01-01T00:00:03Z" }).snapshot;
+  // Review child exits 0 while pipeline is in cancelling
+  const s4 = stepPipeline(s3, { type: "job.terminal", jobId: j3, status: "succeeded", exitCode: 0, log: "/tmp/3.log", error: null, finished: "2026-01-01T00:00:04Z", nextJobId: randomUUID() }).snapshot;
+  const d = stepPipeline(s4, { type: "delivery.begin", now: "2026-01-01T00:00:05Z" });
+  assert.equal(s4.context.terminalState, "cancelled");
+  assert.deepEqual(d.effects, [{
+    type: "wake.deliver",
+    workflowId: wfId,
+    attempt: 1,
+    wake: { session: "sess-1", prompt: "done", cwd: "/tmp" },
+    state: "cancelled",
+  }]);
+});
+
+test("pipelineStatus enforces session scoping and launchPipeline rejects id conflicts & bad wake fields", { skip: !available }, async () => {
+  const { dir } = setup();
+  const wfId = randomUUID();
+  launchPipeline({
+    id: wfId,
+    group: "scope-test",
+    cwd: dir,
+    ownerSession: "sess-owner",
+    diagnose: ["/bin/true"],
+    implement: ["/bin/true"],
+    review: ["/bin/true"],
+  }, { dir });
+
+  assert.throws(() => pipelineStatus(wfId, { dir, ownerSession: "sess-other" }), /owned by session sess-owner/);
+  assert.equal(pipelineStatus(wfId, { dir, ownerSession: "sess-other", allSessions: true }).id, wfId);
+
+  assert.throws(() => launchPipeline({
+    id: wfId,
+    group: "scope-test",
+    cwd: dir,
+    ownerSession: "sess-owner",
+    diagnose: ["/bin/false"],
+    implement: ["/bin/true"],
+    review: ["/bin/true"],
+  }, { dir }), /conflict/);
+
+  assert.throws(() => launchPipeline({
+    id: randomUUID(),
+    group: "scope-test",
+    cwd: dir,
+    diagnose: ["/bin/true"],
+    implement: ["/bin/true"],
+    review: ["/bin/true"],
+    wake: { session: "sess-owner", prompt: "hi", extra: true } as any,
+  }, { dir }), /unsupported wake field/);
 });

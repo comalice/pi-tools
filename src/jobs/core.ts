@@ -92,13 +92,13 @@ export type Row = {
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const sessionPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/;
 
-function checkId(id: string) { if (typeof id !== "string" || !idPattern.test(id)) throw new Error("id must be a lowercase UUID v4"); }
-function checkGroup(group: string) { if (typeof group !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/.test(group)) throw new Error("invalid group"); }
-function checkSession(session: string, field: string) {
+export function checkId(id: string) { if (typeof id !== "string" || !idPattern.test(id)) throw new Error("id must be a lowercase UUID v4"); }
+export function checkGroup(group: string) { if (typeof group !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/.test(group)) throw new Error("invalid group"); }
+export function checkSession(session: string, field: string) {
   if (typeof session !== "string" || !sessionPattern.test(session)) throw new Error(`invalid ${field}`);
 }
 
-function validateWake(wake: WakeInput | undefined) {
+export function validateWake(wake: WakeInput | undefined) {
   if (wake === undefined) return;
   if (!wake || typeof wake !== "object" || Object.keys(wake).some(k => !["session", "prompt", "maxRetries", "model"].includes(k))) {
     throw new Error("unsupported wake field");
@@ -144,6 +144,23 @@ export function pokeController(dir: string): void {
     sock.on("error", () => {});
     sock.unref();
   } catch {}
+}
+
+export function pokeControllerAsync(dir: string, timeoutMs = 200): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(); } };
+    const timer = setTimeout(done, timeoutMs);
+    timer.unref?.();
+    try {
+      const sock = net.createConnection(controllerSocketPath(dir));
+      sock.on("connect", () => { sock.end("tick\n", done); });
+      sock.on("error", done);
+      sock.on("close", done);
+    } catch {
+      done();
+    }
+  });
 }
 
 export function openDb(dir: string) {

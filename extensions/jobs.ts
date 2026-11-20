@@ -106,9 +106,18 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "pipeline_status", label: "Worker Pipeline Status",
-    description: "Inspect a worker pipeline's current stage, child job records/logs, and completion delivery state.",
-    parameters: Type.Object({ id: Type.String() }),
-    async execute(_id, p) { return result(runJobOperation("pipeline_status", p)); },
+    description: "Inspect a worker pipeline's current stage, child job records/logs, and completion delivery state. Scoped to the current session by default.",
+    parameters: Type.Object({
+      id: Type.String(),
+      allSessions: Type.Optional(Type.Boolean({ description: "Allow inspecting a pipeline owned by a different session (default false)." })),
+    }),
+    async execute(_id, p, _signal, _update, ctx) {
+      const ownerSession = ctx.sessionManager.getSessionId?.() || undefined;
+      return result(runJobOperation("pipeline_status", {
+        ...p,
+        ...(ownerSession ? { ownerSession } : {}),
+      }));
+    },
   });
 
   pi.registerTool({

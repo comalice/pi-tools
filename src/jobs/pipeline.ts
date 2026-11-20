@@ -4,12 +4,16 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Snapshot } from "../statechart/core.ts";
 import {
+  checkGroup,
+  checkId,
+  checkSession,
   jobDir,
   launchJob,
   openDb,
   pokeController,
   stopJob,
   transaction,
+  validateWake,
   type DeliveryInfo,
   type Options,
   type Row as JobRow,
@@ -17,6 +21,7 @@ import {
 } from "./core.ts";
 import type { DeliveryState, ExecutionOutcome, WakeTarget } from "./chart.ts";
 import {
+  bindArgv,
   createPipelineSnapshot,
   pipelineDeliveryFromSnapshot,
   pipelineStateFromSnapshot,
@@ -77,16 +82,6 @@ export interface WorkflowRow {
   delivery_notified: number;
 }
 
-const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const groupPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/;
-const sessionPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/;
-
-function checkId(id: string) {
-  if (typeof id !== "string" || !idPattern.test(id)) throw new Error("workflow id must be a lowercase UUID v4");
-}
-function checkGroup(group: string) {
-  if (typeof group !== "string" || !groupPattern.test(group)) throw new Error("invalid group");
-}
 function checkArgv(argv: unknown, label: string) {
   if (!Array.isArray(argv) || !argv.length || argv.length > 256 || argv.some(a => typeof a !== "string" || a.includes("\0") || a.length > 16384)) {
     throw new Error(`invalid ${label} argv`);
@@ -110,19 +105,8 @@ function validatePipelineInput(input: PipelineInput) {
   if (input.maxStageRetries !== undefined && (!Number.isInteger(input.maxStageRetries) || input.maxStageRetries < 0 || input.maxStageRetries > 3)) {
     throw new Error("maxStageRetries must be an integer between 0 and 3");
   }
-  if (input.ownerSession !== undefined && (typeof input.ownerSession !== "string" || !sessionPattern.test(input.ownerSession))) {
-    throw new Error("invalid ownerSession");
-  }
-  if (input.wake !== undefined) {
-    if (!input.wake || typeof input.wake !== "object") throw new Error("invalid wake");
-    if (typeof input.wake.session !== "string" || !sessionPattern.test(input.wake.session)) throw new Error("invalid wake.session");
-    if (typeof input.wake.prompt !== "string" || !input.wake.prompt.trim() || input.wake.prompt.startsWith("@") || input.wake.prompt.includes("\0")) {
-      throw new Error("invalid wake.prompt");
-    }
-    if (input.wake.maxRetries !== undefined && (!Number.isInteger(input.wake.maxRetries) || input.wake.maxRetries < 1 || input.wake.maxRetries > 20)) {
-      throw new Error("wake.maxRetries must be an integer between 1 and 20");
-    }
-  }
+  if (input.ownerSession !== undefined) checkSession(input.ownerSession, "ownerSession");
+  validateWake(input.wake);
 }
 
 export function ensureWorkflowSchema(db: DatabaseSync): void {
@@ -205,21 +189,55 @@ function persistSnapshot(db: DatabaseSync, id: string, snap: Snapshot<PipelineCo
   );
 }
 
+function failSpawn(dir: string, workflowId: string, jobId: string, error: string): void {
+  const db = openDb(dir);
+  const followUp: PipelineEffect[] = [];
+  try {
+    ensureWorkflowSchema(db);
+    transaction(db, () => {
+      const fresh = db.prepare("SELECT * FROM workflows WHERE id=?").get(workflowId) as unknown as WorkflowRow | undefined;
+      if (!fresh || fresh.active_job_id !== jobId) return;
+      const snap = parseWorkflowSnapshot(fresh);
+      const res = stepPipeline(snap, {
+        type: "job.terminal",
+        jobId,
+        status: "failed",
+        exitCode: null,
+        log: "",
+        error,
+        finished: new Date().toISOString(),
+        nextJobId: randomUUID(),
+      });
+      if (res.changed) {
+        persistSnapshot(db, workflowId, res.snapshot, new Date().toISOString());
+        for (const eff of res.effects) followUp.push(eff);
+      }
+    });
+  } finally {
+    db.close();
+  }
+  if (followUp.length > 0) runPipelineEffects(followUp, dir);
+}
+
 function runPipelineEffects(effects: readonly PipelineEffect[], dir: string): void {
   for (const eff of effects) {
     if (eff.type === "job.spawn") {
-      launchJob({
-        id: eff.jobId,
-        group: eff.group,
-        argv: [...eff.argv],
-        cwd: eff.cwd,
-        ...(eff.ownerSession ? { ownerSession: eff.ownerSession } : {}),
-      }, { dir });
+      try {
+        launchJob({
+          id: eff.jobId,
+          group: eff.group,
+          argv: [...eff.argv],
+          cwd: eff.cwd,
+          ...(eff.ownerSession ? { ownerSession: eff.ownerSession } : {}),
+        }, { dir });
+      } catch (e) {
+        failSpawn(dir, eff.workflowId, eff.jobId, `child job spawn failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
     } else if (eff.type === "job.stop") {
       try {
         stopJob(eff.jobId, { dir, allSessions: true });
       } catch {
-        // Child may already be terminal or reconciling; controller tick will observe its terminal state.
+        // Child may still be launching or already terminal; advanceWorkflows retries stop on cancelling workflows.
       }
     }
   }
@@ -251,7 +269,14 @@ export function launchPipeline(input: PipelineInput, options: Options = {}): Pip
     transaction(db, () => {
       const existing = db.prepare("SELECT * FROM workflows WHERE id=?").get(input.id) as unknown as WorkflowRow | undefined;
       if (existing) {
-        if (existing.group_name !== input.group) throw new Error("pipeline id conflict");
+        const existingCtx = parseWorkflowSnapshot(existing).context;
+        if (
+          existing.group_name !== input.group ||
+          JSON.stringify(existingCtx.specs) !== JSON.stringify(specs) ||
+          existingCtx.requireApproval !== !!input.requireApproval ||
+          existingCtx.maxStageRetries !== (input.maxStageRetries ?? 0) ||
+          JSON.stringify(existingCtx.wake) !== JSON.stringify(wake)
+        ) throw new Error("pipeline id conflict");
         return;
       }
       const now = new Date().toISOString();
@@ -302,7 +327,11 @@ export function pipelineStatus(id: string, options: Options = {}): Pipeline {
   const db = openDb(jobDir(options));
   try {
     ensureWorkflowSchema(db);
-    return toPipeline(getWorkflowRow(db, id));
+    const r = getWorkflowRow(db, id);
+    if (options.ownerSession && !options.allSessions && r.owner_session && r.owner_session !== options.ownerSession) {
+      throw new Error(`pipeline ${id} is owned by session ${r.owner_session}; pass allSessions to override`);
+    }
+    return toPipeline(r);
   } finally {
     db.close();
   }
@@ -400,8 +429,52 @@ export function advanceWorkflows(dir: string): void {
     for (const wf of active) {
       if (!wf.active_job_id) continue;
       const child = db.prepare("SELECT * FROM jobs WHERE id=?").get(wf.active_job_id) as unknown as JobRow | undefined;
-      if (!child) continue;
-      if (!["succeeded", "failed", "cancelled", "interrupted"].includes(child.state)) continue;
+      if (!child) {
+        // Missing child row: if cancelling, finalize cleanly; otherwise retry spawn or fail if unspawnable.
+        if (wf.state === "cancelling") {
+          transaction(db, () => {
+            const fresh = getWorkflowRow(db, wf.id);
+            if (fresh.active_job_id !== wf.active_job_id) return;
+            const snap = parseWorkflowSnapshot(fresh);
+            const res = stepPipeline(snap, {
+              type: "job.terminal",
+              jobId: wf.active_job_id!,
+              status: "cancelled",
+              exitCode: null,
+              log: "",
+              error: null,
+              finished: new Date().toISOString(),
+              nextJobId: randomUUID(),
+            });
+            if (res.changed) persistSnapshot(db, wf.id, res.snapshot, new Date().toISOString());
+          });
+        } else {
+          const snap = parseWorkflowSnapshot(wf);
+          const stage = snap.context.activeStage;
+          if (stage) {
+            const spec = snap.context.specs[stage];
+            effectsToRun.push({
+              type: "job.spawn",
+              workflowId: wf.id,
+              stage,
+              jobId: wf.active_job_id,
+              group: wf.group_name,
+              argv: bindArgv(spec.argv, snap.context.stages),
+              cwd: spec.cwd,
+              ownerSession: wf.owner_session,
+            });
+          }
+        }
+        continue;
+      }
+
+      if (!["succeeded", "failed", "cancelled", "interrupted"].includes(child.state)) {
+        // If cancelling and child is still active (e.g. previous stop failed during launching window), retry stop.
+        if (wf.state === "cancelling") {
+          effectsToRun.push({ type: "job.stop", workflowId: wf.id, jobId: child.id });
+        }
+        continue;
+      }
 
       transaction(db, () => {
         const fresh = getWorkflowRow(db, wf.id);

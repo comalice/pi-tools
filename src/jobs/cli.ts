@@ -17,7 +17,7 @@ type Request =
   | { operation: "stop"; input: { id: string; ownerSession?: string; allSessions?: boolean } }
   | { operation: "pipeline_launch"; input: PipelineInput }
   | { operation: "pipeline_list"; input?: { group?: string; ownerSession?: string; allSessions?: boolean } }
-  | { operation: "pipeline_status"; input: { id: string } }
+  | { operation: "pipeline_status"; input: { id: string; ownerSession?: string; allSessions?: boolean } }
   | { operation: "pipeline_approve"; input: { id: string; ownerSession?: string; allSessions?: boolean } }
   | { operation: "pipeline_cancel"; input: { id: string; ownerSession?: string; allSessions?: boolean } };
 
@@ -38,7 +38,10 @@ function run(request: Request) {
       ownerSession: request.input?.ownerSession,
       allSessions: request.input?.allSessions,
     });
-    case "pipeline_status": return pipelineStatus(request.input?.id);
+    case "pipeline_status": return pipelineStatus(request.input?.id, {
+      ownerSession: request.input?.ownerSession,
+      allSessions: request.input?.allSessions,
+    });
     case "pipeline_approve": return approvePipeline(request.input?.id, {
       ownerSession: request.input?.ownerSession,
       allSessions: request.input?.allSessions,

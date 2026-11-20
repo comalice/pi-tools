@@ -82,9 +82,9 @@ function buildWakePrompt(req: WakeDeliveryRequest): string {
 
 export function defaultDeliverWake(req: WakeDeliveryRequest): Promise<WakeDeliveryResult> {
   return new Promise((resolve) => {
-    const locksDir = path.join(scheduleDir(), "locks");
-    mkdirSync(locksDir, { recursive: true, mode: 0o700 });
-    const lockFile = path.join(locksDir, `session-${req.wake.session}.lock`);
+    const dir = scheduleDir();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const lockFile = path.join(dir, `wake-${req.wake.session}.lock`);
     const piBin = process.env.PI_BIN || "/usr/bin/pi";
     const piArgs = ["--session", req.wake.session];
     if (req.wake.model) piArgs.push("--model", req.wake.model);
@@ -93,7 +93,7 @@ export function defaultDeliverWake(req: WakeDeliveryRequest): Promise<WakeDelive
     const child = spawn(
       "flock",
       ["-n", "-E", "75", lockFile, "timeout", "--kill-after=2s", "30m", piBin, ...piArgs],
-      { cwd: req.wake.cwd, stdio: ["ignore", "pipe", "pipe"] },
+      { cwd: req.wake.cwd, stdio: ["ignore", "ignore", "pipe"] },
     );
 
     let stderr = "";
@@ -135,6 +135,7 @@ export class JobsController {
   private readonly sendNotify: (notice: DeadLetterNotice) => Promise<void>;
 
   private server: net.Server | null = null;
+  private readonly sockets = new Set<net.Socket>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private ticking = false;
@@ -144,7 +145,7 @@ export class JobsController {
   constructor(options: ControllerOptions = {}) {
     this.dir = jobDir(options);
     this.reconcileIntervalMs = options.reconcileIntervalMs ?? 5000;
-    this.backoffBaseMs = options.backoffBaseMs ?? 5000;
+    this.backoffBaseMs = options.backoffBaseMs ?? 15_000;
     this.maxBackoffMs = options.maxBackoffMs ?? 5 * 60_000;
     this.deliverWake = options.deliverWake ?? defaultDeliverWake;
     this.sendNotify = options.sendNotify ?? defaultSendNotify;
@@ -164,19 +165,26 @@ export class JobsController {
 
     const sockPath = controllerSocketPath(this.dir);
     try { unlinkSync(sockPath); } catch {}
-    await new Promise<void>((resolve, reject) => {
-      const server = net.createServer((conn) => {
-        conn.on("data", () => { this.poke(); });
-        conn.on("error", () => {});
-        conn.end();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const server = net.createServer((conn) => {
+          this.sockets.add(conn);
+          conn.on("close", () => { this.sockets.delete(conn); });
+          conn.on("data", () => { this.poke(); });
+          conn.on("error", () => {});
+          conn.end();
+        });
+        server.once("error", reject);
+        server.listen(sockPath, () => {
+          try { chmodSync(sockPath, 0o600); } catch {}
+          this.server = server;
+          resolve();
+        });
       });
-      server.once("error", reject);
-      server.listen(sockPath, () => {
-        try { chmodSync(sockPath, 0o600); } catch {}
-        this.server = server;
-        resolve();
-      });
-    });
+    } catch (e) {
+      this.running = false;
+      throw e;
+    }
 
     this.poke();
   }
@@ -187,9 +195,14 @@ export class JobsController {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    for (const sock of this.sockets) {
+      try { sock.destroy(); } catch {}
+    }
+    this.sockets.clear();
     if (this.server) {
-      await new Promise<void>((resolve) => this.server!.close(() => resolve()));
+      const srv = this.server;
       this.server = null;
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
     }
     try { unlinkSync(controllerSocketPath(this.dir)); } catch {}
     if (this.activeTickPromise) {
@@ -203,7 +216,7 @@ export class JobsController {
       this.pendingTick = true;
       return;
     }
-    this.activeTickPromise = this.runTickLoop();
+    this.activeTickPromise = this.runTickLoop().catch(() => {});
   }
 
   private async runTickLoop(): Promise<void> {

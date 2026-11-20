@@ -1,7 +1,7 @@
 // This process is the systemd service main process. It never uses a shell.
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { openDb, pokeController } from "./core.ts";
+import { openDb, pokeControllerAsync } from "./core.ts";
 import { cgroupPopulated, ownCgroup } from "./cgroup.ts";
 
 const [dir, id] = process.argv.slice(2);
@@ -35,7 +35,7 @@ async function finish(code: number | null, signal: string | null, error: string 
   }
   await retry(() => db.prepare("UPDATE jobs SET state=?, exit_code=?, signal=?, error=?, finished=? WHERE id=? AND cancel_requested=0 AND state IN ('running','launching')").run(code === 0 && !signal && !error ? "succeeded" : "failed", code, signal, error, new Date().toISOString(), id));
   closeSync(log); db.close();
-  pokeController(dir);
+  await pokeControllerAsync(dir);
   process.exitCode = code === 0 && !signal && !error ? 0 : 1;
 }
 try {
