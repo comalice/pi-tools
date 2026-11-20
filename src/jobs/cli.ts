@@ -4,16 +4,22 @@ import type { JobInput } from "./core.ts";
 
 type Request =
   | { operation: "launch"; input: JobInput }
-  | { operation: "list"; input?: { group?: string } }
+  | { operation: "list"; input?: { group?: string; ownerSession?: string; allSessions?: boolean } }
   | { operation: "status"; input: { id: string } }
-  | { operation: "stop"; input: { id: string } };
+  | { operation: "stop"; input: { id: string; ownerSession?: string; allSessions?: boolean } };
 
 function run(request: Request) {
   switch (request.operation) {
     case "launch": return launchJob(request.input);
-    case "list": return listJobs(request.input?.group);
+    case "list": return listJobs(request.input?.group, {
+      ownerSession: request.input?.ownerSession,
+      allSessions: request.input?.allSessions,
+    });
     case "status": return jobStatus(request.input?.id);
-    case "stop": return stopJob(request.input?.id);
+    case "stop": return stopJob(request.input?.id, {
+      ownerSession: request.input?.ownerSession,
+      allSessions: request.input?.allSessions,
+    });
     default: throw new Error(`unknown jobs operation: ${(request as Request).operation}`);
   }
 }

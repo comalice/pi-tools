@@ -6,7 +6,7 @@ PI_HUB_PORT ?= 6342
 SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
 UNITS := pi-wiki-serve.service pi-memory-hub.service pi-memory-ingest.service pi-memory-ingest.timer \
          pi-memory-vector-refresh.service pi-memory-vector-refresh.timer \
-         pi-dream.service pi-dream.timer
+         pi-dream.service pi-dream.timer pi-jobs-controller.service
 SPOKE_UNITS := pi-memory-push.service pi-memory-push.timer
 
 .PHONY: run ingest maintain dream status test \
@@ -85,6 +85,7 @@ install-systemd: $(SYSTEMD_USER_DIR) ## Install and enable user systemd units
 	systemctl --user enable --now pi-memory-ingest.timer
 	systemctl --user enable --now pi-memory-vector-refresh.timer
 	systemctl --user enable pi-dream.timer
+	systemctl --user enable --now pi-jobs-controller.service
 	@echo "---"
 	@echo "Units live in $(SYSTEMD_USER_DIR). To survive logout, run: loginctl enable-linger $$USER"
 	@echo "Start a dream run now with: systemctl --user start pi-dream.service"
@@ -107,11 +108,11 @@ uninstall-spoke: ## Disable and remove the spoke-side push timer
 
 uninstall-systemd: ## Disable and remove the user systemd units
 	-systemctl --user disable --now pi-wiki-serve.service pi-memory-hub.service pi-memory-ingest.timer \
-	  pi-memory-vector-refresh.timer pi-dream.timer 2>/dev/null
+	  pi-memory-vector-refresh.timer pi-dream.timer pi-jobs-controller.service 2>/dev/null
 	@for unit in $(UNITS); do rm -f $(SYSTEMD_USER_DIR)/$$unit; done
 	systemctl --user daemon-reload
 	@echo "units removed"
 
 systemd-status: ## Show unit and timer status
-	@systemctl --user status pi-wiki-serve.service pi-memory-hub.service --no-pager -l | head -20 || true
+	@systemctl --user status pi-wiki-serve.service pi-memory-hub.service pi-jobs-controller.service --no-pager -l | head -30 || true
 	@systemctl --user list-timers --no-pager | grep -E "pi-|NEXT" || true

@@ -1,0 +1,12 @@
+[Unit]
+Description=Pi managed jobs statechart controller
+Documentation=@REPO@/docs/scheduling.md
+
+[Service]
+Type=simple
+ExecStart=@NODE@ --experimental-strip-types @REPO@/src/jobs/daemon.ts
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
