@@ -35,6 +35,41 @@ cwd. Pi resolves the session ID; the scheduler does not independently verify
 which session Pi opens. Prompts starting with `@` are rejected because Pi can
 interpret them as file arguments. NUL bytes are not supported in arguments.
 
+## Recurring wakes and the session-resume cost trap
+
+A recurring wake **resumes the same session every fire** (`pi --session <id>
+--print`). On external inference (any per-token-priced provider), each fire
+re-sends the **entire accumulated conversation history** as input tokens. For a
+long-lived monitored session the context grows monotonically, so a 30-minute
+check-in wake gets more expensive every fire and can drain a credit balance to
+HTTP 402 within a day. This is the single largest recurring-wake cost driver
+and it is invisible from the scheduler's side (fires succeed; the bill grows).
+
+**When to resume vs. start fresh.** Resume only when the wake genuinely needs
+the prior conversation (an orchestrator continuing its own deliberation). For
+**self-contained periodic checks** — read a status file, list jobs, act on what
+you find, append a dated record — the prompt carries everything the wake needs,
+and a fresh session is correct and far cheaper.
+
+There is no per-wake `fresh` flag today; the runner always passes `--session`.
+Until one exists, the options are:
+
+- Write the check-in prompt to be fully self-contained (status file +
+  job_list + skill, not prior conversation) and accept the resume cost, or
+- Run the check as a `job_launch`d ephemeral `pi --no-session --print <prompt>`
+  from a cron/systemd timer instead of `schedule_wake` (no registry entry, no
+  session resume), or
+- Patch the generated `wake-run.sh` to invoke `--no-session` for the specific
+  session id (fragile: the payload is regenerated on new schedules).
+
+**Candidate change (not implemented):** a `fresh: true` field on the wake
+registry entry that makes the runner use `--no-session` (keeping the
+session-keyed `flock` so overlap is still prevented). This is the durable fix
+and removes the need to patch the generated payload. Related: session-scoped
+gating for `list_scheduled`/`cancel_scheduled` (a cross-session cancel of a
+monitoring wake is how the nanotern grid stalled; see that repo's
+OPERATIONS.md 2026-11-19).
+
 GNU `timeout` sends TERM to the execution process group at the configured
 limit, then KILL two seconds later if the supervised command remains. A wrapper stays
 alive through the grace period even if Pi exits on TERM, so ordinary children
