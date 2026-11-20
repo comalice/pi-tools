@@ -72,4 +72,90 @@ export default function (pi: ExtensionAPI) {
       }));
     },
   });
+
+  pi.registerTool({
+    name: "pipeline_launch", label: "Launch Worker Pipeline",
+    description: "Launch a statechart-driven diagnose -> [optional approval] -> implement -> review worker pipeline managed by pi-jobs-controller. Stage argv entries may reference {{diagnose.log}}, {{diagnose.jobId}}, {{implement.log}}, {{implement.jobId}}.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Caller-generated lowercase UUID v4 idempotency key." }),
+      group: Type.String({ description: "Project/group label." }),
+      cwd: Type.Optional(Type.String({ description: "Absolute working directory; defaults to current session cwd." })),
+      diagnose: Type.Array(Type.String(), { minItems: 1, maxItems: 256, description: "Argv for the diagnose stage (absolute executable)." }),
+      implement: Type.Array(Type.String(), { minItems: 1, maxItems: 256, description: "Argv for the implement stage (may use {{diagnose.log}})." }),
+      review: Type.Array(Type.String(), { minItems: 1, maxItems: 256, description: "Argv for the review stage (may use {{diagnose.log}}, {{implement.log}})." }),
+      requireApproval: Type.Optional(Type.Boolean({ description: "Pause in awaiting_approval after diagnose until pipeline_approve is called (default false)." })),
+      maxStageRetries: Type.Optional(Type.Integer({ minimum: 0, maximum: 3, description: "Bounded retries per stage on worker failure (default 0)." })),
+      wake: Type.Optional(Type.Object({
+        session: Type.Optional(Type.String({ description: "Session id to wake when the pipeline reaches a terminal state (default: current session)." })),
+        prompt: Type.String({ minLength: 1, maxLength: 4000, description: "Idempotent wake prompt delivered on pipeline completion/failure/cancellation." }),
+        maxRetries: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+        model: Type.Optional(Type.String()),
+      }, { additionalProperties: false })),
+    }, { additionalProperties: false }),
+    async execute(_id, p, _signal, _update, ctx) {
+      const ownerSession = ctx.sessionManager.getSessionId?.() || undefined;
+      const wake = p.wake ? { ...p.wake, session: p.wake.session ?? ownerSession } : undefined;
+      return result(runJobOperation("pipeline_launch", {
+        ...p,
+        cwd: p.cwd ?? ctx.sessionManager.getCwd(),
+        ...(ownerSession ? { ownerSession } : {}),
+        ...(wake ? { wake } : {}),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    name: "pipeline_status", label: "Worker Pipeline Status",
+    description: "Inspect a worker pipeline's current stage, child job records/logs, and completion delivery state.",
+    parameters: Type.Object({ id: Type.String() }),
+    async execute(_id, p) { return result(runJobOperation("pipeline_status", p)); },
+  });
+
+  pi.registerTool({
+    name: "pipeline_list", label: "List Worker Pipelines",
+    description: "List worker pipelines, scoped to the current session by default.",
+    parameters: Type.Object({
+      group: Type.Optional(Type.String()),
+      allSessions: Type.Optional(Type.Boolean({ description: "Include pipelines owned by other sessions (default false)." })),
+    }),
+    async execute(_id, p, _signal, _update, ctx) {
+      const ownerSession = ctx.sessionManager.getSessionId?.() || undefined;
+      return result(runJobOperation("pipeline_list", {
+        ...p,
+        ...(ownerSession ? { ownerSession } : {}),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    name: "pipeline_approve", label: "Approve Worker Pipeline",
+    description: "Approve a pipeline paused in awaiting_approval so it advances to the implement stage.",
+    parameters: Type.Object({
+      id: Type.String(),
+      allSessions: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_id, p, _signal, _update, ctx) {
+      const ownerSession = ctx.sessionManager.getSessionId?.() || undefined;
+      return result(runJobOperation("pipeline_approve", {
+        ...p,
+        ...(ownerSession ? { ownerSession } : {}),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    name: "pipeline_cancel", label: "Cancel Worker Pipeline",
+    description: "Cancel a worker pipeline, stopping any active child worker job first.",
+    parameters: Type.Object({
+      id: Type.String(),
+      allSessions: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_id, p, _signal, _update, ctx) {
+      const ownerSession = ctx.sessionManager.getSessionId?.() || undefined;
+      return result(runJobOperation("pipeline_cancel", {
+        ...p,
+        ...(ownerSession ? { ownerSession } : {}),
+      }));
+    },
+  });
 }

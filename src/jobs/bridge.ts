@@ -4,7 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type JobOperation = "launch" | "list" | "status" | "stop";
+export type JobOperation =
+  | "launch"
+  | "list"
+  | "status"
+  | "stop"
+  | "pipeline_launch"
+  | "pipeline_list"
+  | "pipeline_status"
+  | "pipeline_approve"
+  | "pipeline_cancel";
 
 const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
 let pathNode: string | undefined;

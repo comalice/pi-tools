@@ -19,6 +19,16 @@ import {
   type ExecutionOutcome,
   type WakeTarget,
 } from "./chart.ts";
+import {
+  advanceWorkflows,
+  ensureWorkflowSchema,
+  parseWorkflowSnapshot,
+  type WorkflowRow,
+} from "./pipeline.ts";
+import {
+  pipelineDeliveryFromSnapshot,
+  stepPipeline,
+} from "./pipeline-chart.ts";
 
 export interface WakeDeliveryRequest {
   jobId: string;
@@ -220,12 +230,18 @@ export class JobsController {
     let delay = this.reconcileIntervalMs;
     const db = openDb(this.dir);
     try {
-      const next = db.prepare(
+      ensureWorkflowSchema(db);
+      const nextJob = db.prepare(
         "SELECT MIN(delivery_next_at) AS next_at FROM jobs WHERE delivery_state='pending' AND delivery_next_at IS NOT NULL",
       ).get() as { next_at: string | null } | undefined;
-      if (next?.next_at) {
-        const ms = Math.max(10, Date.parse(next.next_at) - Date.now());
-        delay = Math.min(delay, ms);
+      const nextWf = db.prepare(
+        "SELECT MIN(delivery_next_at) AS next_at FROM workflows WHERE delivery_state='pending' AND delivery_next_at IS NOT NULL",
+      ).get() as { next_at: string | null } | undefined;
+      for (const candidate of [nextJob?.next_at, nextWf?.next_at]) {
+        if (candidate) {
+          const ms = Math.max(10, Date.parse(candidate) - Date.now());
+          delay = Math.min(delay, ms);
+        }
       }
     } finally {
       db.close();
@@ -242,6 +258,7 @@ export class JobsController {
     const notices: DeadLetterNotice[] = [];
     const db = openDb(this.dir);
     try {
+      ensureWorkflowSchema(db);
       const stuck = db.prepare("SELECT * FROM jobs WHERE delivery_state='delivering'").all() as unknown as Row[];
       for (const r of stuck) {
         const snap = loadDeliverySnapshot(r);
@@ -274,6 +291,41 @@ export class JobsController {
           }
         }
       }
+
+      const stuckWfs = db.prepare("SELECT * FROM workflows WHERE delivery_state='delivering'").all() as unknown as WorkflowRow[];
+      for (const wf of stuckWfs) {
+        const snap = parseWorkflowSnapshot(wf);
+        const retryAt = this.computeRetryAt(wf.delivery_attempts || 1);
+        const res = stepPipeline(snap, {
+          type: "delivery.fail",
+          error: "controller restarted during delivery",
+          retryAt,
+        });
+        const nextState = pipelineDeliveryFromSnapshot(res.snapshot);
+        transaction(db, () => {
+          db.prepare(
+            "UPDATE workflows SET snapshot_json=?, updated=?, delivery_state=?, delivery_next_at=?, delivery_error=?, delivery_notified=? WHERE id=? AND delivery_state='delivering'",
+          ).run(
+            JSON.stringify(res.snapshot),
+            new Date().toISOString(),
+            nextState,
+            res.snapshot.context.nextDeliveryAt,
+            res.snapshot.context.lastDeliveryError,
+            res.snapshot.context.notified ? 1 : 0,
+            wf.id,
+          );
+        });
+        for (const eff of res.effects) {
+          if (eff.type === "notify.dead_letter") {
+            notices.push({
+              jobId: eff.workflowId,
+              group: eff.group,
+              outcome: eff.state === "completed" ? "succeeded" : eff.state,
+              error: eff.error,
+            });
+          }
+        }
+      }
     } finally {
       db.close();
     }
@@ -286,7 +338,9 @@ export class JobsController {
     // 1. Reconcile active jobs against systemd so missing units / crashes are detected automatically.
     const db = openDb(this.dir);
     let dueRows: Row[] = [];
+    let dueWorkflows: WorkflowRow[] = [];
     try {
+      ensureWorkflowSchema(db);
       const active = db.prepare("SELECT * FROM jobs WHERE state IN ('launching','running')").all() as unknown as Row[];
       for (const r of active) {
         try {
@@ -295,18 +349,138 @@ export class JobsController {
           // Transient systemctl error: try again on the next tick.
         }
       }
-      const nowIso = new Date().toISOString();
-      dueRows = db.prepare(
-        "SELECT * FROM jobs WHERE delivery_state='pending' AND (delivery_next_at IS NULL OR delivery_next_at <= ?) ORDER BY created,id",
-      ).all(nowIso) as unknown as Row[];
     } finally {
       db.close();
     }
 
-    // 2. Process due wake deliveries through the statechart.
+    // 2. Advance Layer 2 workflows whose active child job reached a terminal state.
+    advanceWorkflows(this.dir);
+
+    const dbDue = openDb(this.dir);
+    try {
+      ensureWorkflowSchema(dbDue);
+      const nowIso = new Date().toISOString();
+      dueRows = dbDue.prepare(
+        "SELECT * FROM jobs WHERE delivery_state='pending' AND (delivery_next_at IS NULL OR delivery_next_at <= ?) ORDER BY created,id",
+      ).all(nowIso) as unknown as Row[];
+      dueWorkflows = dbDue.prepare(
+        "SELECT * FROM workflows WHERE delivery_state='pending' AND (delivery_next_at IS NULL OR delivery_next_at <= ?) ORDER BY created,id",
+      ).all(nowIso) as unknown as WorkflowRow[];
+    } finally {
+      dbDue.close();
+    }
+
+    // 3. Process due wake deliveries for jobs and workflows through their statecharts.
     for (const due of dueRows) {
       if (!this.running) break;
       await this.processDelivery(due.id);
+    }
+    for (const wf of dueWorkflows) {
+      if (!this.running) break;
+      await this.processWorkflowDelivery(wf.id);
+    }
+  }
+
+  private async processWorkflowDelivery(workflowId: string): Promise<void> {
+    let wakeReq: WakeDeliveryRequest | null = null;
+    const nowIso = new Date().toISOString();
+
+    const dbStart = openDb(this.dir);
+    try {
+      ensureWorkflowSchema(dbStart);
+      transaction(dbStart, () => {
+        const wf = dbStart.prepare("SELECT * FROM workflows WHERE id=?").get(workflowId) as unknown as WorkflowRow | undefined;
+        if (!wf || wf.delivery_state !== "pending") return;
+        const snap = parseWorkflowSnapshot(wf);
+        const res = stepPipeline(snap, { type: "delivery.begin", now: nowIso });
+        if (!res.changed) return;
+        const nextState = pipelineDeliveryFromSnapshot(res.snapshot);
+        dbStart.prepare(
+          "UPDATE workflows SET snapshot_json=?, updated=?, delivery_state=?, delivery_attempts=?, delivery_next_at=? WHERE id=? AND delivery_state='pending'",
+        ).run(
+          JSON.stringify(res.snapshot),
+          nowIso,
+          nextState,
+          res.snapshot.context.deliveryAttempts,
+          res.snapshot.context.nextDeliveryAt,
+          workflowId,
+        );
+        for (const eff of res.effects) {
+          if (eff.type === "wake.deliver") {
+            const stages = res.snapshot.context.stages;
+            const lastLog = stages.review?.log ?? stages.implement?.log ?? stages.diagnose?.log ?? "";
+            wakeReq = {
+              jobId: wf.id,
+              group: wf.group_name,
+              attempt: eff.attempt,
+              outcome: eff.state === "completed" ? "succeeded" : eff.state,
+              wake: eff.wake,
+              log: lastLog,
+              exitCode: null,
+              signal: null,
+              error: res.snapshot.context.error,
+            };
+          }
+        }
+      });
+    } finally {
+      dbStart.close();
+    }
+
+    if (!wakeReq) return;
+    const req: WakeDeliveryRequest = wakeReq;
+    let outcome: WakeDeliveryResult;
+    try {
+      outcome = await this.deliverWake(req);
+    } catch (e) {
+      outcome = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+
+    const notices: DeadLetterNotice[] = [];
+    const dbFinish = openDb(this.dir);
+    try {
+      ensureWorkflowSchema(dbFinish);
+      transaction(dbFinish, () => {
+        const wf = dbFinish.prepare("SELECT * FROM workflows WHERE id=?").get(workflowId) as unknown as WorkflowRow | undefined;
+        if (!wf || wf.delivery_state !== "delivering") return;
+        const snap = parseWorkflowSnapshot(wf);
+        const evt = outcome.ok
+          ? ({ type: "delivery.ack" } as const)
+          : ({
+              type: "delivery.fail",
+              error: outcome.error,
+              retryAt: this.computeRetryAt(wf.delivery_attempts),
+            } as const);
+        const res = stepPipeline(snap, evt);
+        const nextState = pipelineDeliveryFromSnapshot(res.snapshot);
+        dbFinish.prepare(
+          "UPDATE workflows SET snapshot_json=?, updated=?, delivery_state=?, delivery_next_at=?, delivery_error=?, delivery_notified=? WHERE id=? AND delivery_state='delivering'",
+        ).run(
+          JSON.stringify(res.snapshot),
+          new Date().toISOString(),
+          nextState,
+          res.snapshot.context.nextDeliveryAt,
+          res.snapshot.context.lastDeliveryError,
+          res.snapshot.context.notified ? 1 : 0,
+          workflowId,
+        );
+        for (const eff of res.effects) {
+          if (eff.type === "notify.dead_letter") {
+            notices.push({
+              jobId: eff.workflowId,
+              group: eff.group,
+              outcome: eff.state === "completed" ? "succeeded" : eff.state,
+              error: eff.error,
+            });
+          }
+        }
+      });
+    } finally {
+      dbFinish.close();
+    }
+
+    for (const notice of notices) {
+      await this.sendNotify(notice);
     }
   }
 

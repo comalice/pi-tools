@@ -1,12 +1,25 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { jobStatus, launchJob, listJobs, stopJob } from "./core.ts";
 import type { JobInput } from "./core.ts";
+import {
+  approvePipeline,
+  cancelPipeline,
+  launchPipeline,
+  listPipelines,
+  pipelineStatus,
+  type PipelineInput,
+} from "./pipeline.ts";
 
 type Request =
   | { operation: "launch"; input: JobInput }
   | { operation: "list"; input?: { group?: string; ownerSession?: string; allSessions?: boolean } }
   | { operation: "status"; input: { id: string } }
-  | { operation: "stop"; input: { id: string; ownerSession?: string; allSessions?: boolean } };
+  | { operation: "stop"; input: { id: string; ownerSession?: string; allSessions?: boolean } }
+  | { operation: "pipeline_launch"; input: PipelineInput }
+  | { operation: "pipeline_list"; input?: { group?: string; ownerSession?: string; allSessions?: boolean } }
+  | { operation: "pipeline_status"; input: { id: string } }
+  | { operation: "pipeline_approve"; input: { id: string; ownerSession?: string; allSessions?: boolean } }
+  | { operation: "pipeline_cancel"; input: { id: string; ownerSession?: string; allSessions?: boolean } };
 
 function run(request: Request) {
   switch (request.operation) {
@@ -17,6 +30,20 @@ function run(request: Request) {
     });
     case "status": return jobStatus(request.input?.id);
     case "stop": return stopJob(request.input?.id, {
+      ownerSession: request.input?.ownerSession,
+      allSessions: request.input?.allSessions,
+    });
+    case "pipeline_launch": return launchPipeline(request.input);
+    case "pipeline_list": return listPipelines(request.input?.group, {
+      ownerSession: request.input?.ownerSession,
+      allSessions: request.input?.allSessions,
+    });
+    case "pipeline_status": return pipelineStatus(request.input?.id);
+    case "pipeline_approve": return approvePipeline(request.input?.id, {
+      ownerSession: request.input?.ownerSession,
+      allSessions: request.input?.allSessions,
+    });
+    case "pipeline_cancel": return cancelPipeline(request.input?.id, {
       ownerSession: request.input?.ownerSession,
       allSessions: request.input?.allSessions,
     });
